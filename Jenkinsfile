@@ -1,9 +1,7 @@
+def changedFolders = []
+
 pipeline {
     agent any
-
-    triggers {
-        githubPush()
-    }
 
     stages {
         stage('Checkout') {
@@ -12,33 +10,111 @@ pipeline {
             }
         }
 
-        stage('Build') {
+        stage('Detect Changes') {
             steps {
-                echo 'Building the project...'
-                sh 'ls -la one/ two/'
+                script {
+                    def changes = sh(
+                        script: "git diff --name-only HEAD~1 HEAD || echo ''",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "============================================"
+                    echo "Branch: ${env.BRANCH_NAME}"
+                    echo "Changed files:\n${changes}"
+                    echo "============================================"
+
+                    def folders = ['one', 'two']
+                    folders.each { folder ->
+                        if (changes.split('\n').any { it.startsWith("${folder}/") }) {
+                            changedFolders.add(folder)
+                        }
+                    }
+
+                    if (changedFolders.isEmpty()) {
+                        echo "No project folder changes detected. Skipping build & deploy."
+                    } else {
+                        echo "Folders with changes: ${changedFolders.join(', ')}"
+                    }
+                }
             }
         }
 
-        stage('Test') {
+        stage('Build folder: one') {
+            when {
+                expression { return changedFolders.contains('one') }
+            }
             steps {
-                echo 'Running tests...'
-                sh 'python3 one/app.py'
+                echo "Building project in folder 'one'..."
+                sh 'ls -la one/'
             }
         }
 
-        stage('Deploy') {
+        stage('Build folder: two') {
+            when {
+                expression { return changedFolders.contains('two') }
+            }
             steps {
-                echo 'Deploying application...'
+                echo "Building project in folder 'two'..."
+                sh 'ls -la two/'
+            }
+        }
+
+        stage('Deploy folder: one') {
+            when {
+                allOf {
+                    expression { return changedFolders.contains('one') }
+                    anyOf {
+                        branch 'develop'
+                        branch 'qa-devops'
+                    }
+                }
+            }
+            steps {
+                script {
+                    echo "Deploying folder 'one' from branch: ${env.BRANCH_NAME}"
+                    if (env.BRANCH_NAME == 'develop') {
+                        echo "Deploying 'one' to DEVELOPMENT environment..."
+                        // sh 'cd one && ./deploy.sh dev'
+                    } else if (env.BRANCH_NAME == 'qa-devops') {
+                        echo "Deploying 'one' to QA environment..."
+                        // sh 'cd one && ./deploy.sh qa'
+                    }
+                }
+            }
+        }
+
+        stage('Deploy folder: two') {
+            when {
+                allOf {
+                    expression { return changedFolders.contains('two') }
+                    anyOf {
+                        branch 'develop'
+                        branch 'qa-devops'
+                    }
+                }
+            }
+            steps {
+                script {
+                    echo "Deploying folder 'two' from branch: ${env.BRANCH_NAME}"
+                    if (env.BRANCH_NAME == 'develop') {
+                        echo "Deploying 'two' to DEVELOPMENT environment..."
+                        // sh 'cd two && ./deploy.sh dev'
+                    } else if (env.BRANCH_NAME == 'qa-devops') {
+                        echo "Deploying 'two' to QA environment..."
+                        // sh 'cd two && ./deploy.sh qa'
+                    }
+                }
             }
         }
     }
 
     post {
         success {
-            echo 'Pipeline completed successfully!'
+            echo "Pipeline completed for branch: ${env.BRANCH_NAME}"
+            echo "Deployed folders: ${changedFolders.isEmpty() ? 'none' : changedFolders.join(', ')}"
         }
         failure {
-            echo 'Pipeline failed!'
+            echo "Pipeline FAILED for branch: ${env.BRANCH_NAME}"
         }
     }
 }
