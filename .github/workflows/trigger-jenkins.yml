@@ -70,35 +70,37 @@ jobs:
           echo "  Author:          ${{ github.actor }}"
           echo "========================================="
 
-          RESPONSE=$(curl -s -o /tmp/jenkins_response.txt -w "%{http_code}" \
+          # Method 1: Try Jenkins Multibranch scan API with authentication
+          echo "Triggering Jenkins Multibranch Pipeline scan..."
+
+          SCAN_RESPONSE=$(curl -s -o /tmp/jenkins_scan.txt -w "%{http_code}" \
             -X POST \
-            "${{ secrets.JENKINS_URL }}/github-webhook/" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "ref": "refs/heads/${{ github.ref_name }}",
-              "after": "${{ github.sha }}",
-              "repository": {
-                "url": "${{ github.event.repository.clone_url }}",
-                "html_url": "${{ github.event.repository.html_url }}",
-                "full_name": "${{ github.repository }}"
-              },
-              "pusher": {
-                "name": "${{ github.actor }}"
-              },
-              "head_commit": {
-                "id": "${{ github.sha }}",
-                "message": "${{ github.event.head_commit.message }}"
-              }
-            }')
+            -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+            "${{ secrets.JENKINS_URL }}/job/${{ secrets.JENKINS_JOB_NAME }}/scan")
 
-          echo "Jenkins HTTP Response Code: $RESPONSE"
+          echo "Jenkins Scan Response: $SCAN_RESPONSE"
 
-          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 204 ]; then
-            echo "Jenkins triggered successfully!"
+          if [ "$SCAN_RESPONSE" -eq 200 ] || [ "$SCAN_RESPONSE" -eq 201 ] || [ "$SCAN_RESPONSE" -eq 302 ]; then
+            echo "Jenkins Multibranch scan triggered successfully!"
           else
-            echo "ERROR: Jenkins returned HTTP $RESPONSE"
-            cat /tmp/jenkins_response.txt
-            exit 1
+            echo "Scan returned HTTP $SCAN_RESPONSE, trying build with parameters..."
+            cat /tmp/jenkins_scan.txt
+
+            # Method 2: Fallback — trigger specific branch build
+            BUILD_RESPONSE=$(curl -s -o /tmp/jenkins_build.txt -w "%{http_code}" \
+              -X POST \
+              -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+              "${{ secrets.JENKINS_URL }}/job/${{ secrets.JENKINS_JOB_NAME }}/job/${{ github.ref_name }}/build")
+
+            echo "Jenkins Build Response: $BUILD_RESPONSE"
+
+            if [ "$BUILD_RESPONSE" -eq 200 ] || [ "$BUILD_RESPONSE" -eq 201 ] || [ "$BUILD_RESPONSE" -eq 302 ]; then
+              echo "Jenkins branch build triggered successfully!"
+            else
+              echo "ERROR: Jenkins returned HTTP $BUILD_RESPONSE"
+              cat /tmp/jenkins_build.txt
+              exit 1
+            fi
           fi
 
       - name: Summary
