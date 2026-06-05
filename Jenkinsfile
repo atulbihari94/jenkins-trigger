@@ -1,8 +1,9 @@
-def changedFolders = []
-def deployFolders = []
+def deployProducts = []
 def prId = 'N/A'
 def commitMsg = ''
 def commonChanged = false
+def sdkChanged = false
+def allProducts = ['ONE', 'TIM', 'TIM+', 'FLO']
 
 pipeline {
     agent any
@@ -37,18 +38,19 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    def productFolders = ['one', 'two']
+                    def changedFiles = changes.split('\n')
 
-                    if (changes.split('\n').any { it.startsWith("common/") }) {
-                        commonChanged = true
-                        deployFolders = productFolders.collect()
+                    commonChanged = changedFiles.any { it.startsWith("common/") }
+                    sdkChanged = changedFiles.any { it.startsWith("sdk/") }
+
+                    if (commonChanged || sdkChanged) {
+                        deployProducts = allProducts.collect()
                     } else {
-                        productFolders.each { folder ->
-                            if (changes.split('\n').any { it.startsWith("${folder}/") }) {
-                                changedFolders.add(folder)
+                        allProducts.each { product ->
+                            if (changedFiles.any { it.startsWith("products/${product}/") }) {
+                                deployProducts.add(product)
                             }
                         }
-                        deployFolders = changedFolders.collect()
                     }
 
                     echo "============================================"
@@ -56,78 +58,104 @@ pipeline {
                     echo "============================================"
                     echo "  PR ID:              #${prId}"
                     echo "  Branch:              ${env.BRANCH_NAME}"
+                    echo "  Commit:              ${commitMsg}"
                     echo "  Common changed:      ${commonChanged}"
+                    echo "  SDK changed:         ${sdkChanged}"
                     echo "  Changed files:"
-                    changes.split('\n').each { echo "    - ${it}" }
-                    if (commonChanged) {
-                        echo "  >> COMMON folder changed — deploying ALL products"
+                    changedFiles.each { echo "    - ${it}" }
+                    if (commonChanged || sdkChanged) {
+                        echo "  >> SHARED CODE changed — deploying ALL products"
                     }
-                    echo "  Products to deploy:  ${deployFolders.isEmpty() ? 'NONE' : deployFolders.join(', ')}"
+                    echo "  Products to deploy:  ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
                     echo "============================================"
                 }
             }
         }
 
-        stage('Deploy product: one') {
+        stage('Deploy ONE') {
             when {
                 allOf {
-                    expression { return deployFolders.contains('one') }
-                    anyOf {
-                        branch 'develop'
-                        branch 'qa-devops'
-                    }
+                    expression { return deployProducts.contains('ONE') }
+                    anyOf { branch 'develop'; branch 'qa-devops' }
                 }
             }
             steps {
                 script {
                     def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = commonChanged ? 'common/ changed — deploying all products' : 'one/ changed'
+                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/ONE/ changed'
                     echo "============================================"
-                    echo "  DEPLOYING PRODUCT: one"
+                    echo "  DEPLOYING: ONE (FSO)"
                     echo "  PR:          #${prId}"
                     echo "  Reason:      ${reason}"
                     echo "  Environment: ${env_name}"
-                    echo "  Branch:      ${env.BRANCH_NAME}"
                     echo "============================================"
-                    if (env.BRANCH_NAME == 'develop') {
-                        // sh 'cd one && ./deploy.sh dev'
-                        echo "Deploy command: cd one && ./deploy.sh dev"
-                    } else if (env.BRANCH_NAME == 'qa-devops') {
-                        // sh 'cd one && ./deploy.sh qa'
-                        echo "Deploy command: cd one && ./deploy.sh qa"
-                    }
+                    // sh "cd products/ONE && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
                 }
             }
         }
 
-        stage('Deploy product: two') {
+        stage('Deploy TIM') {
             when {
                 allOf {
-                    expression { return deployFolders.contains('two') }
-                    anyOf {
-                        branch 'develop'
-                        branch 'qa-devops'
-                    }
+                    expression { return deployProducts.contains('TIM') }
+                    anyOf { branch 'develop'; branch 'qa-devops' }
                 }
             }
             steps {
                 script {
                     def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = commonChanged ? 'common/ changed — deploying all products' : 'two/ changed'
+                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/TIM/ changed'
                     echo "============================================"
-                    echo "  DEPLOYING PRODUCT: two"
+                    echo "  DEPLOYING: TIM"
                     echo "  PR:          #${prId}"
                     echo "  Reason:      ${reason}"
                     echo "  Environment: ${env_name}"
-                    echo "  Branch:      ${env.BRANCH_NAME}"
                     echo "============================================"
-                    if (env.BRANCH_NAME == 'develop') {
-                        // sh 'cd two && ./deploy.sh dev'
-                        echo "Deploy command: cd two && ./deploy.sh dev"
-                    } else if (env.BRANCH_NAME == 'qa-devops') {
-                        // sh 'cd two && ./deploy.sh qa'
-                        echo "Deploy command: cd two && ./deploy.sh qa"
-                    }
+                    // sh "cd products/TIM && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
+                }
+            }
+        }
+
+        stage('Deploy TIM+') {
+            when {
+                allOf {
+                    expression { return deployProducts.contains('TIM+') }
+                    anyOf { branch 'develop'; branch 'qa-devops' }
+                }
+            }
+            steps {
+                script {
+                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
+                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/TIM+/ changed'
+                    echo "============================================"
+                    echo "  DEPLOYING: TIM+"
+                    echo "  PR:          #${prId}"
+                    echo "  Reason:      ${reason}"
+                    echo "  Environment: ${env_name}"
+                    echo "============================================"
+                    // sh "cd 'products/TIM+' && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
+                }
+            }
+        }
+
+        stage('Deploy FLO') {
+            when {
+                allOf {
+                    expression { return deployProducts.contains('FLO') }
+                    anyOf { branch 'develop'; branch 'qa-devops' }
+                }
+            }
+            steps {
+                script {
+                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
+                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/FLO/ changed'
+                    echo "============================================"
+                    echo "  DEPLOYING: FLO"
+                    echo "  PR:          #${prId}"
+                    echo "  Reason:      ${reason}"
+                    echo "  Environment: ${env_name}"
+                    echo "============================================"
+                    // sh "cd products/FLO && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
                 }
             }
         }
@@ -140,7 +168,8 @@ pipeline {
             echo "  PR:             #${prId}"
             echo "  Branch:         ${env.BRANCH_NAME}"
             echo "  Common changed: ${commonChanged}"
-            echo "  Products:       ${deployFolders.isEmpty() ? 'none' : deployFolders.join(', ')}"
+            echo "  SDK changed:    ${sdkChanged}"
+            echo "  Products:       ${deployProducts.isEmpty() ? 'none' : deployProducts.join(', ')}"
             echo "============================================"
         }
         failure {

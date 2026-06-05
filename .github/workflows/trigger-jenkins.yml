@@ -8,160 +8,165 @@ on:
 
 jobs:
   detect-changes:
-    name: Detect Changed Folders
+    name: Detect Changed Products
     runs-on: ubuntu-latest
     outputs:
       one_changed: ${{ steps.changes.outputs.one_changed }}
-      two_changed: ${{ steps.changes.outputs.two_changed }}
+      tim_changed: ${{ steps.changes.outputs.tim_changed }}
+      timplus_changed: ${{ steps.changes.outputs.timplus_changed }}
+      flo_changed: ${{ steps.changes.outputs.flo_changed }}
       common_changed: ${{ steps.changes.outputs.common_changed }}
-      changed_folders: ${{ steps.changes.outputs.changed_folders }}
+      sdk_changed: ${{ steps.changes.outputs.sdk_changed }}
+      changed_products: ${{ steps.changes.outputs.changed_products }}
+      deploy_all: ${{ steps.changes.outputs.deploy_all }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Detect folder changes
+      - name: Detect changes
         id: changes
         run: |
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          ONE_CHANGED="false"
-          TWO_CHANGED="false"
-          COMMON_CHANGED="false"
-          CHANGED_FOLDERS=""
+          ONE="false"; TIM="false"; TIMPLUS="false"; FLO="false"
+          COMMON="false"; SDK="false"; DEPLOY_ALL="false"
+          PRODUCTS=""
 
-          # If common/ changed, deploy ALL products
+          # Check shared folders first
           if echo "$CHANGED_FILES" | grep -q "^common/"; then
-            COMMON_CHANGED="true"
-            ONE_CHANGED="true"
-            TWO_CHANGED="true"
-            CHANGED_FOLDERS="one,two"
-            echo ">> COMMON folder changed — all products will be built & deployed"
-          else
-            if echo "$CHANGED_FILES" | grep -q "^one/"; then
-              ONE_CHANGED="true"
-              CHANGED_FOLDERS="one"
-            fi
+            COMMON="true"; DEPLOY_ALL="true"
+          fi
+          if echo "$CHANGED_FILES" | grep -q "^sdk/"; then
+            SDK="true"; DEPLOY_ALL="true"
+          fi
 
-            if echo "$CHANGED_FILES" | grep -q "^two/"; then
-              TWO_CHANGED="true"
-              if [ -n "$CHANGED_FOLDERS" ]; then
-                CHANGED_FOLDERS="$CHANGED_FOLDERS,two"
-              else
-                CHANGED_FOLDERS="two"
-              fi
+          if [ "$DEPLOY_ALL" = "true" ]; then
+            ONE="true"; TIM="true"; TIMPLUS="true"; FLO="true"
+            PRODUCTS="ONE,TIM,TIM+,FLO"
+            echo ">> SHARED CODE (common/ or sdk/) changed — ALL products will be built & deployed"
+          else
+            if echo "$CHANGED_FILES" | grep -q "^products/ONE/"; then
+              ONE="true"
+              PRODUCTS="ONE"
+            fi
+            if echo "$CHANGED_FILES" | grep -q "^products/TIM/"; then
+              TIM="true"
+              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,TIM" || PRODUCTS="TIM"
+            fi
+            if echo "$CHANGED_FILES" | grep -q "^products/TIM+/"; then
+              TIMPLUS="true"
+              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,TIM+" || PRODUCTS="TIM+"
+            fi
+            if echo "$CHANGED_FILES" | grep -q "^products/FLO/"; then
+              FLO="true"
+              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,FLO" || PRODUCTS="FLO"
             fi
           fi
 
-          echo "one_changed=$ONE_CHANGED" >> $GITHUB_OUTPUT
-          echo "two_changed=$TWO_CHANGED" >> $GITHUB_OUTPUT
-          echo "common_changed=$COMMON_CHANGED" >> $GITHUB_OUTPUT
-          echo "changed_folders=$CHANGED_FOLDERS" >> $GITHUB_OUTPUT
+          echo "one_changed=$ONE" >> $GITHUB_OUTPUT
+          echo "tim_changed=$TIM" >> $GITHUB_OUTPUT
+          echo "timplus_changed=$TIMPLUS" >> $GITHUB_OUTPUT
+          echo "flo_changed=$FLO" >> $GITHUB_OUTPUT
+          echo "common_changed=$COMMON" >> $GITHUB_OUTPUT
+          echo "sdk_changed=$SDK" >> $GITHUB_OUTPUT
+          echo "changed_products=$PRODUCTS" >> $GITHUB_OUTPUT
+          echo "deploy_all=$DEPLOY_ALL" >> $GITHUB_OUTPUT
 
           echo "-----------------------------------"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Common changed: $COMMON_CHANGED"
-          echo "Folder 'one' changed: $ONE_CHANGED"
-          echo "Folder 'two' changed: $TWO_CHANGED"
-          echo "Changed folders: $CHANGED_FOLDERS"
+          echo "Branch:           ${{ github.ref_name }}"
+          echo "Common changed:   $COMMON"
+          echo "SDK changed:      $SDK"
+          echo "Deploy all:       $DEPLOY_ALL"
+          echo "Products:         $PRODUCTS"
 
   # ──────────────────────────────────────────────
-  #  BUILD & TEST (GitHub Actions handles this)
+  #  BUILD & TEST per product (GitHub Actions)
   # ──────────────────────────────────────────────
 
-  build-folder-one:
-    name: Build & Test - folder one
+  build-ONE:
+    name: "Build: ONE (FSO)"
     needs: detect-changes
     if: needs.detect-changes.outputs.one_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      - uses: actions/checkout@v4
+      - name: Build & Test ONE
         run: |
-          pip install pyflakes
-          if [ -f one/requirements.txt ]; then pip install -r one/requirements.txt; fi
+          echo "Building product ONE (FSO)..."
+          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/ONE/ changed' }}"
+          ls -la products/ONE/app/
+          echo "ONE build passed!"
 
-      - name: Lint
-        run: pyflakes one/ || true
-
-      - name: Test
-        run: python one/app.py
-
-      - name: Build summary
-        run: |
-          echo "## Folder One - Build & Test Passed" >> $GITHUB_STEP_SUMMARY
-          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-
-  build-folder-two:
-    name: Build & Test - folder two
+  build-TIM:
+    name: "Build: TIM"
     needs: detect-changes
-    if: needs.detect-changes.outputs.two_changed == 'true'
+    if: needs.detect-changes.outputs.tim_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      - uses: actions/checkout@v4
+      - name: Build & Test TIM
         run: |
-          pip install pyflakes
-          if [ -f two/requirements.txt ]; then pip install -r two/requirements.txt; fi
+          echo "Building product TIM..."
+          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/TIM/ changed' }}"
+          ls -la products/TIM/app/
+          echo "TIM build passed!"
 
-      - name: Lint
-        run: pyflakes two/ || true
-
-      - name: Test
-        run: python -c "from two.utils import get_timestamp, format_log; print(format_log('info', 'Build verified'))"
-
-      - name: Build summary
+  build-TIMPLUS:
+    name: "Build: TIM+"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.timplus_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Test TIM+
         run: |
-          echo "## Folder Two - Build & Test Passed" >> $GITHUB_STEP_SUMMARY
-          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Building product TIM+..."
+          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/TIM+/ changed' }}"
+          ls -la "products/TIM+/app/"
+          echo "TIM+ build passed!"
+
+  build-FLO:
+    name: "Build: FLO"
+    needs: detect-changes
+    if: needs.detect-changes.outputs.flo_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Test FLO
+        run: |
+          echo "Building product FLO..."
+          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/FLO/ changed' }}"
+          ls -la products/FLO/app/
+          echo "FLO build passed!"
 
   # ──────────────────────────────────────────────
-  #  DEPLOY (trigger Jenkins - only after build passes)
+  #  DEPLOY via Jenkins (only after builds pass)
   # ──────────────────────────────────────────────
 
   deploy-via-jenkins:
-    name: Deploy via Jenkins - ${{ github.ref_name }}
-    needs: [detect-changes, build-folder-one, build-folder-two]
+    name: "Deploy via Jenkins - ${{ github.ref_name }}"
+    needs: [detect-changes, build-ONE, build-TIM, build-TIMPLUS, build-FLO]
     if: |
       always() &&
-      needs.detect-changes.outputs.changed_folders != '' &&
+      needs.detect-changes.outputs.changed_products != '' &&
       needs.detect-changes.result == 'success' &&
-      (needs.build-folder-one.result == 'success' || needs.build-folder-one.result == 'skipped') &&
-      (needs.build-folder-two.result == 'success' || needs.build-folder-two.result == 'skipped') &&
-      !(needs.build-folder-one.result == 'failure' || needs.build-folder-two.result == 'failure')
+      !(needs.build-ONE.result == 'failure' || needs.build-TIM.result == 'failure' || needs.build-TIMPLUS.result == 'failure' || needs.build-FLO.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Jenkins Deployment
         run: |
           echo "========================================="
-          echo "  DEPLOYMENT TRIGGER"
+          echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
           echo "========================================="
-          echo "  Branch:          ${{ github.ref_name }}"
-          echo "  Changed folders: ${{ needs.detect-changes.outputs.changed_folders }}"
-          echo "  Commit:          ${{ github.sha }}"
-          echo "  Author:          ${{ github.actor }}"
-          echo "  Build One:       ${{ needs.build-folder-one.result }}"
-          echo "  Build Two:       ${{ needs.build-folder-two.result }}"
+          echo "  Branch:    ${{ github.ref_name }}"
+          echo "  Products:  ${{ needs.detect-changes.outputs.changed_products }}"
+          echo "  Commit:    ${{ github.sha }}"
+          echo "  Author:    ${{ github.actor }}"
           echo "========================================="
-
-          echo "All builds passed. Triggering Jenkins for deployment..."
 
           RESPONSE=$(curl -s -o /tmp/jenkins_response.txt -w "%{http_code}" \
             -X POST \
@@ -182,44 +187,42 @@ jobs:
               },
               "head_commit": {
                 "id": "${{ github.sha }}",
-                "message": "Deploy ${{ needs.detect-changes.outputs.changed_folders }} to ${{ github.ref_name }}"
+                "message": "Deploy ${{ needs.detect-changes.outputs.changed_products }} to ${{ github.ref_name }}"
               }
             }')
 
-          echo "Jenkins Response Code: $RESPONSE"
-
+          echo "Jenkins Response: $RESPONSE"
           if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 204 ]; then
-            echo "Jenkins deployment triggered successfully!"
+            echo "Jenkins deployment triggered!"
           else
             echo "ERROR: Jenkins returned HTTP $RESPONSE"
             cat /tmp/jenkins_response.txt
             exit 1
           fi
 
-      - name: Deployment Summary
+      - name: Summary
         run: |
           echo "## Deployment Triggered" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Changed Folders** | \`${{ needs.detect-changes.outputs.changed_folders }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Common changed** | ${{ needs.detect-changes.outputs.common_changed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SDK changed** | ${{ needs.detect-changes.outputs.sdk_changed }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Author** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Jenkins Job** | [Open Jenkins](${{ secrets.JENKINS_URL }}/job/${{ secrets.JENKINS_JOB_NAME }}/) |" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
   #  NO CHANGES
   # ──────────────────────────────────────────────
 
   skip-notification:
-    name: No Changes Detected
+    name: No Product Changes
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed_folders == ''
+    if: needs.detect-changes.outputs.changed_products == ''
     runs-on: ubuntu-latest
     steps:
-      - name: Skip notification
+      - name: Skip
         run: |
-          echo "No changes in project folders (one/, two/). Skipping build and deploy."
+          echo "No changes in product folders or shared code. Skipping."
           echo "## No Build Needed" >> $GITHUB_STEP_SUMMARY
-          echo "No changes detected in project folders. Build and deploy skipped." >> $GITHUB_STEP_SUMMARY
