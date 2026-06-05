@@ -1,4 +1,4 @@
-name: Trigger Jenkins on PR Merge
+name: CI/CD Pipeline
 
 on:
   push:
@@ -55,22 +55,100 @@ jobs:
           echo "Folder 'two' changed: $TWO_CHANGED"
           echo "Changed folders: $CHANGED_FOLDERS"
 
-  trigger-jenkins:
-    name: Trigger Jenkins - ${{ github.ref_name }}
+  # ──────────────────────────────────────────────
+  #  BUILD & TEST (GitHub Actions handles this)
+  # ──────────────────────────────────────────────
+
+  build-folder-one:
+    name: Build & Test - folder one
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed_folders != ''
+    if: needs.detect-changes.outputs.one_changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Jenkins via GitHub Webhook
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
         run: |
+          pip install pyflakes
+          if [ -f one/requirements.txt ]; then pip install -r one/requirements.txt; fi
+
+      - name: Lint
+        run: pyflakes one/ || true
+
+      - name: Test
+        run: python one/app.py
+
+      - name: Build summary
+        run: |
+          echo "## Folder One - Build & Test Passed" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+  build-folder-two:
+    name: Build & Test - folder two
+    needs: detect-changes
+    if: needs.detect-changes.outputs.two_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyflakes
+          if [ -f two/requirements.txt ]; then pip install -r two/requirements.txt; fi
+
+      - name: Lint
+        run: pyflakes two/ || true
+
+      - name: Test
+        run: python -c "from two.utils import get_timestamp, format_log; print(format_log('info', 'Build verified'))"
+
+      - name: Build summary
+        run: |
+          echo "## Folder Two - Build & Test Passed" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  #  DEPLOY (trigger Jenkins - only after build passes)
+  # ──────────────────────────────────────────────
+
+  deploy-via-jenkins:
+    name: Deploy via Jenkins - ${{ github.ref_name }}
+    needs: [detect-changes, build-folder-one, build-folder-two]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.changed_folders != '' &&
+      needs.detect-changes.result == 'success' &&
+      (needs.build-folder-one.result == 'success' || needs.build-folder-one.result == 'skipped') &&
+      (needs.build-folder-two.result == 'success' || needs.build-folder-two.result == 'skipped') &&
+      !(needs.build-folder-one.result == 'failure' || needs.build-folder-two.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Jenkins Deployment
+        run: |
+          echo "========================================="
+          echo "  DEPLOYMENT TRIGGER"
           echo "========================================="
           echo "  Branch:          ${{ github.ref_name }}"
           echo "  Changed folders: ${{ needs.detect-changes.outputs.changed_folders }}"
           echo "  Commit:          ${{ github.sha }}"
           echo "  Author:          ${{ github.actor }}"
+          echo "  Build One:       ${{ needs.build-folder-one.result }}"
+          echo "  Build Two:       ${{ needs.build-folder-two.result }}"
           echo "========================================="
 
-          echo "Triggering Jenkins via /github-webhook/..."
+          echo "All builds passed. Triggering Jenkins for deployment..."
 
           RESPONSE=$(curl -s -o /tmp/jenkins_response.txt -w "%{http_code}" \
             -X POST \
@@ -91,23 +169,23 @@ jobs:
               },
               "head_commit": {
                 "id": "${{ github.sha }}",
-                "message": "Push to ${{ github.ref_name }}"
+                "message": "Deploy ${{ needs.detect-changes.outputs.changed_folders }} to ${{ github.ref_name }}"
               }
             }')
 
           echo "Jenkins Response Code: $RESPONSE"
 
           if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 204 ]; then
-            echo "Jenkins triggered successfully!"
+            echo "Jenkins deployment triggered successfully!"
           else
             echo "ERROR: Jenkins returned HTTP $RESPONSE"
             cat /tmp/jenkins_response.txt
             exit 1
           fi
 
-      - name: Summary
+      - name: Deployment Summary
         run: |
-          echo "## Jenkins Build Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Triggered" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -117,55 +195,9 @@ jobs:
           echo "| **Author** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Jenkins Job** | [Open Jenkins](${{ secrets.JENKINS_URL }}/job/${{ secrets.JENKINS_JOB_NAME }}/) |" >> $GITHUB_STEP_SUMMARY
 
-  build-folder-one:
-    name: Build & Verify - folder one
-    needs: detect-changes
-    if: needs.detect-changes.outputs.one_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Lint folder one
-        run: |
-          echo "Linting folder 'one'..."
-          pip install pyflakes
-          pyflakes one/ || true
-
-      - name: Run folder one
-        run: |
-          echo "Running folder 'one' app..."
-          python one/app.py
-
-  build-folder-two:
-    name: Build & Verify - folder two
-    needs: detect-changes
-    if: needs.detect-changes.outputs.two_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Lint folder two
-        run: |
-          echo "Linting folder 'two'..."
-          pip install pyflakes
-          pyflakes two/ || true
-
-      - name: Verify folder two
-        run: |
-          echo "Verifying folder 'two' imports..."
-          python -c "from two.utils import get_timestamp, format_log; print(format_log('info', 'Build verified'))"
+  # ──────────────────────────────────────────────
+  #  NO CHANGES
+  # ──────────────────────────────────────────────
 
   skip-notification:
     name: No Changes Detected
@@ -175,7 +207,6 @@ jobs:
     steps:
       - name: Skip notification
         run: |
-          echo "No changes in monitored folders (one/, two/)."
-          echo "Skipping Jenkins trigger and build."
+          echo "No changes in project folders (one/, two/). Skipping build and deploy."
           echo "## No Build Needed" >> $GITHUB_STEP_SUMMARY
-          echo "No changes detected in project folders (\`one/\`, \`two/\`). Build skipped." >> $GITHUB_STEP_SUMMARY
+          echo "No changes detected in project folders. Build and deploy skipped." >> $GITHUB_STEP_SUMMARY

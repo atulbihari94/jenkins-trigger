@@ -19,6 +19,7 @@ pipeline {
                     ).trim()
 
                     echo "============================================"
+                    echo "DEPLOYMENT PIPELINE"
                     echo "Branch: ${env.BRANCH_NAME}"
                     echo "Changed files:\n${changes}"
                     echo "============================================"
@@ -31,31 +32,11 @@ pipeline {
                     }
 
                     if (changedFolders.isEmpty()) {
-                        echo "No project folder changes detected. Skipping build & deploy."
+                        echo "No project folder changes detected. Skipping deployment."
                     } else {
-                        echo "Folders with changes: ${changedFolders.join(', ')}"
+                        echo "Folders to deploy: ${changedFolders.join(', ')}"
                     }
                 }
-            }
-        }
-
-        stage('Build folder: one') {
-            when {
-                expression { return changedFolders.contains('one') }
-            }
-            steps {
-                echo "Building project in folder 'one'..."
-                sh 'ls -la one/'
-            }
-        }
-
-        stage('Build folder: two') {
-            when {
-                expression { return changedFolders.contains('two') }
-            }
-            steps {
-                echo "Building project in folder 'two'..."
-                sh 'ls -la two/'
             }
         }
 
@@ -110,11 +91,11 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed for branch: ${env.BRANCH_NAME}"
+            echo "Deployment completed for branch: ${env.BRANCH_NAME}"
             echo "Deployed folders: ${changedFolders.isEmpty() ? 'none' : changedFolders.join(', ')}"
         }
         failure {
-            echo "Pipeline FAILED for branch: ${env.BRANCH_NAME}"
+            echo "Deployment FAILED for branch: ${env.BRANCH_NAME}"
         }
     }
 }
