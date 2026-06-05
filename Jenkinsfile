@@ -1,4 +1,8 @@
 def changedFolders = []
+def deployFolders = []
+def prId = 'N/A'
+def commitMsg = ''
+def commonChanged = false
 
 pipeline {
     agent any
@@ -10,40 +14,64 @@ pipeline {
             }
         }
 
-        stage('Detect Changes') {
+        stage('Detect PR & Changes') {
             steps {
                 script {
+                    commitMsg = sh(
+                        script: "git log -1 --pretty=%B",
+                        returnStdout: true
+                    ).trim()
+
+                    def prMatch = (commitMsg =~ /Merge pull request #(\d+)/)
+                    if (prMatch.find()) {
+                        prId = prMatch.group(1)
+                    } else {
+                        def prMatch2 = (commitMsg =~ /#(\d+)/)
+                        if (prMatch2.find()) {
+                            prId = prMatch2.group(1)
+                        }
+                    }
+
                     def changes = sh(
                         script: "git diff --name-only HEAD~1 HEAD || echo ''",
                         returnStdout: true
                     ).trim()
 
-                    echo "============================================"
-                    echo "DEPLOYMENT PIPELINE"
-                    echo "Branch: ${env.BRANCH_NAME}"
-                    echo "Changed files:\n${changes}"
-                    echo "============================================"
+                    def productFolders = ['one', 'two']
 
-                    def folders = ['one', 'two']
-                    folders.each { folder ->
-                        if (changes.split('\n').any { it.startsWith("${folder}/") }) {
-                            changedFolders.add(folder)
-                        }
-                    }
-
-                    if (changedFolders.isEmpty()) {
-                        echo "No project folder changes detected. Skipping deployment."
+                    if (changes.split('\n').any { it.startsWith("common/") }) {
+                        commonChanged = true
+                        deployFolders = productFolders.collect()
                     } else {
-                        echo "Folders to deploy: ${changedFolders.join(', ')}"
+                        productFolders.each { folder ->
+                            if (changes.split('\n').any { it.startsWith("${folder}/") }) {
+                                changedFolders.add(folder)
+                            }
+                        }
+                        deployFolders = changedFolders.collect()
                     }
+
+                    echo "============================================"
+                    echo "         DEPLOYMENT PIPELINE"
+                    echo "============================================"
+                    echo "  PR ID:              #${prId}"
+                    echo "  Branch:              ${env.BRANCH_NAME}"
+                    echo "  Common changed:      ${commonChanged}"
+                    echo "  Changed files:"
+                    changes.split('\n').each { echo "    - ${it}" }
+                    if (commonChanged) {
+                        echo "  >> COMMON folder changed — deploying ALL products"
+                    }
+                    echo "  Products to deploy:  ${deployFolders.isEmpty() ? 'NONE' : deployFolders.join(', ')}"
+                    echo "============================================"
                 }
             }
         }
 
-        stage('Deploy folder: one') {
+        stage('Deploy product: one') {
             when {
                 allOf {
-                    expression { return changedFolders.contains('one') }
+                    expression { return deployFolders.contains('one') }
                     anyOf {
                         branch 'develop'
                         branch 'qa-devops'
@@ -52,22 +80,30 @@ pipeline {
             }
             steps {
                 script {
-                    echo "Deploying folder 'one' from branch: ${env.BRANCH_NAME}"
+                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
+                    def reason = commonChanged ? 'common/ changed — deploying all products' : 'one/ changed'
+                    echo "============================================"
+                    echo "  DEPLOYING PRODUCT: one"
+                    echo "  PR:          #${prId}"
+                    echo "  Reason:      ${reason}"
+                    echo "  Environment: ${env_name}"
+                    echo "  Branch:      ${env.BRANCH_NAME}"
+                    echo "============================================"
                     if (env.BRANCH_NAME == 'develop') {
-                        echo "Deploying 'one' to DEVELOPMENT environment..."
                         // sh 'cd one && ./deploy.sh dev'
+                        echo "Deploy command: cd one && ./deploy.sh dev"
                     } else if (env.BRANCH_NAME == 'qa-devops') {
-                        echo "Deploying 'one' to QA environment..."
                         // sh 'cd one && ./deploy.sh qa'
+                        echo "Deploy command: cd one && ./deploy.sh qa"
                     }
                 }
             }
         }
 
-        stage('Deploy folder: two') {
+        stage('Deploy product: two') {
             when {
                 allOf {
-                    expression { return changedFolders.contains('two') }
+                    expression { return deployFolders.contains('two') }
                     anyOf {
                         branch 'develop'
                         branch 'qa-devops'
@@ -76,13 +112,21 @@ pipeline {
             }
             steps {
                 script {
-                    echo "Deploying folder 'two' from branch: ${env.BRANCH_NAME}"
+                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
+                    def reason = commonChanged ? 'common/ changed — deploying all products' : 'two/ changed'
+                    echo "============================================"
+                    echo "  DEPLOYING PRODUCT: two"
+                    echo "  PR:          #${prId}"
+                    echo "  Reason:      ${reason}"
+                    echo "  Environment: ${env_name}"
+                    echo "  Branch:      ${env.BRANCH_NAME}"
+                    echo "============================================"
                     if (env.BRANCH_NAME == 'develop') {
-                        echo "Deploying 'two' to DEVELOPMENT environment..."
                         // sh 'cd two && ./deploy.sh dev'
+                        echo "Deploy command: cd two && ./deploy.sh dev"
                     } else if (env.BRANCH_NAME == 'qa-devops') {
-                        echo "Deploying 'two' to QA environment..."
                         // sh 'cd two && ./deploy.sh qa'
+                        echo "Deploy command: cd two && ./deploy.sh qa"
                     }
                 }
             }
@@ -91,11 +135,20 @@ pipeline {
 
     post {
         success {
-            echo "Deployment completed for branch: ${env.BRANCH_NAME}"
-            echo "Deployed folders: ${changedFolders.isEmpty() ? 'none' : changedFolders.join(', ')}"
+            echo "============================================"
+            echo "  DEPLOYMENT COMPLETE"
+            echo "  PR:             #${prId}"
+            echo "  Branch:         ${env.BRANCH_NAME}"
+            echo "  Common changed: ${commonChanged}"
+            echo "  Products:       ${deployFolders.isEmpty() ? 'none' : deployFolders.join(', ')}"
+            echo "============================================"
         }
         failure {
-            echo "Deployment FAILED for branch: ${env.BRANCH_NAME}"
+            echo "============================================"
+            echo "  DEPLOYMENT FAILED"
+            echo "  PR:       #${prId}"
+            echo "  Branch:   ${env.BRANCH_NAME}"
+            echo "============================================"
         }
     }
 }

@@ -13,6 +13,7 @@ jobs:
     outputs:
       one_changed: ${{ steps.changes.outputs.one_changed }}
       two_changed: ${{ steps.changes.outputs.two_changed }}
+      common_changed: ${{ steps.changes.outputs.common_changed }}
       changed_folders: ${{ steps.changes.outputs.changed_folders }}
     steps:
       - name: Checkout code
@@ -29,28 +30,40 @@ jobs:
 
           ONE_CHANGED="false"
           TWO_CHANGED="false"
+          COMMON_CHANGED="false"
           CHANGED_FOLDERS=""
 
-          if echo "$CHANGED_FILES" | grep -q "^one/"; then
+          # If common/ changed, deploy ALL products
+          if echo "$CHANGED_FILES" | grep -q "^common/"; then
+            COMMON_CHANGED="true"
             ONE_CHANGED="true"
-            CHANGED_FOLDERS="one"
-          fi
-
-          if echo "$CHANGED_FILES" | grep -q "^two/"; then
             TWO_CHANGED="true"
-            if [ -n "$CHANGED_FOLDERS" ]; then
-              CHANGED_FOLDERS="$CHANGED_FOLDERS,two"
-            else
-              CHANGED_FOLDERS="two"
+            CHANGED_FOLDERS="one,two"
+            echo ">> COMMON folder changed — all products will be built & deployed"
+          else
+            if echo "$CHANGED_FILES" | grep -q "^one/"; then
+              ONE_CHANGED="true"
+              CHANGED_FOLDERS="one"
+            fi
+
+            if echo "$CHANGED_FILES" | grep -q "^two/"; then
+              TWO_CHANGED="true"
+              if [ -n "$CHANGED_FOLDERS" ]; then
+                CHANGED_FOLDERS="$CHANGED_FOLDERS,two"
+              else
+                CHANGED_FOLDERS="two"
+              fi
             fi
           fi
 
           echo "one_changed=$ONE_CHANGED" >> $GITHUB_OUTPUT
           echo "two_changed=$TWO_CHANGED" >> $GITHUB_OUTPUT
+          echo "common_changed=$COMMON_CHANGED" >> $GITHUB_OUTPUT
           echo "changed_folders=$CHANGED_FOLDERS" >> $GITHUB_OUTPUT
 
           echo "-----------------------------------"
           echo "Branch: ${{ github.ref_name }}"
+          echo "Common changed: $COMMON_CHANGED"
           echo "Folder 'one' changed: $ONE_CHANGED"
           echo "Folder 'two' changed: $TWO_CHANGED"
           echo "Changed folders: $CHANGED_FOLDERS"
