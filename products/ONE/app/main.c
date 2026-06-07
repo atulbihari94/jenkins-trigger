@@ -2,7 +2,7 @@
 #include "board_config.h"
 
 #define PRODUCT_NAME "ONE-FSO"
-#define FIRMWARE_VERSION "2.3.0"
+#define FIRMWARE_VERSION "2.4.0"
 
 int main(void) {
     Board_Init();
