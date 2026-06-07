@@ -1,6 +1,10 @@
 name: CI/CD Pipeline
 
 on:
+  push:
+    branches:
+      - develop
+      - qa-devops
   pull_request:
     types: [closed]
     branches:
@@ -11,7 +15,9 @@ jobs:
   detect-changes:
     name: Detect Changed Products
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true
+    if: |
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Merge')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     outputs:
       one_changed: ${{ steps.changes.outputs.one_changed }}
       tim_changed: ${{ steps.changes.outputs.tim_changed }}
@@ -25,7 +31,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 2
 
       - name: Detect changes
@@ -80,7 +85,7 @@ jobs:
           echo "deploy_all=$DEPLOY_ALL" >> $GITHUB_OUTPUT
 
           echo "-----------------------------------"
-          echo "Branch:           ${{ github.event.pull_request.base.ref }}"
+          echo "Branch:           ${{ github.event.pull_request.base.ref || github.ref_name }}"
           echo "Common changed:   $COMMON"
           echo "SDK changed:      $SDK"
           echo "Deploy all:       $DEPLOY_ALL"
@@ -151,7 +156,7 @@ jobs:
   # ──────────────────────────────────────────────
 
   deploy-via-jenkins:
-    name: "Deploy via Jenkins - ${{ github.event.pull_request.base.ref }}"
+    name: "Deploy via Jenkins - ${{ github.event.pull_request.base.ref || github.ref_name }}"
     needs: [detect-changes, build-ONE, build-TIM, build-TIMPLUS, build-FLO]
     if: |
       always() &&
@@ -169,15 +174,14 @@ jobs:
           echo "========================================="
           echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
           echo "========================================="
-          echo "  Branch:    ${{ github.event.pull_request.base.ref }}"
+          echo "  Branch:    ${{ github.event.pull_request.base.ref || github.ref_name }}"
           echo "  Products:  ${{ needs.detect-changes.outputs.changed_products }}"
-          echo "  PR:        #${{ github.event.pull_request.number }}"
-          echo "  Commit:    ${{ github.event.pull_request.merge_commit_sha }}"
-          echo "  Author:    ${{ github.event.pull_request.user.login }}"
+          echo "  Commit:    ${{ github.sha }}"
+          echo "  Author:    ${{ github.actor }}"
           echo "========================================="
 
           JOB_NAME="event-bridge-monorepo-test-only"
-          BRANCH="${{ github.event.pull_request.base.ref }}"
+          BRANCH="${{ github.event.pull_request.base.ref || github.ref_name }}"
           PRODUCTS="${{ needs.detect-changes.outputs.changed_products }}"
 
           # Get Jenkins crumb for CSRF protection
@@ -221,12 +225,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Branch** | \`${{ github.event.pull_request.base.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.event.pull_request.base.ref || github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **PR** | #${{ github.event.pull_request.number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Common changed** | ${{ needs.detect-changes.outputs.common_changed }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **SDK changed** | ${{ needs.detect-changes.outputs.sdk_changed }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | \`${{ github.event.pull_request.merge_commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
   #  NO CHANGES
