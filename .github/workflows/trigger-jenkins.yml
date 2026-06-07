@@ -158,6 +158,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Jenkins Deployment
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_URL }}
+          JENKINS_USER: ${{ secrets.JENKINS_USER }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
           echo "========================================="
           echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
@@ -168,35 +172,57 @@ jobs:
           echo "  Author:    ${{ github.actor }}"
           echo "========================================="
 
-          RESPONSE=$(curl -s -o /tmp/jenkins_response.txt -w "%{http_code}" \
-            -X POST \
-            "${{ secrets.JENKINS_URL }}/github-webhook/" \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: push" \
-            -d '{
-              "ref": "refs/heads/${{ github.ref_name }}",
-              "after": "${{ github.sha }}",
-              "repository": {
-                "url": "${{ github.event.repository.clone_url }}",
-                "html_url": "${{ github.event.repository.html_url }}",
-                "full_name": "${{ github.repository }}",
-                "clone_url": "${{ github.event.repository.clone_url }}"
-              },
-              "pusher": {
-                "name": "${{ github.actor }}"
-              },
-              "head_commit": {
-                "id": "${{ github.sha }}",
-                "message": "Deploy ${{ needs.detect-changes.outputs.changed_products }} to ${{ github.ref_name }}"
-              }
-            }')
+          JOB_NAME="event-bridge-monorepo-test-only"
+          BRANCH="${{ github.ref_name }}"
 
-          echo "Jenkins Response: $RESPONSE"
-          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 204 ]; then
-            echo "Jenkins deployment triggered!"
+          # Get Jenkins crumb for CSRF protection
+          echo "Getting Jenkins CRUMB..."
+          CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_TOKEN" \
+            "$JENKINS_URL/crumbIssuer/api/json" | jq -r '.crumb // empty')
+
+          if [ -z "$CRUMB" ]; then
+            echo "Warning: Could not get CRUMB, trying without it..."
+            CRUMB_HEADER=""
           else
-            echo "ERROR: Jenkins returned HTTP $RESPONSE"
-            cat /tmp/jenkins_response.txt
+            echo "Got CRUMB successfully"
+            CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
+          fi
+
+          # Method 1: Trigger Multibranch Pipeline scan (picks up new commits)
+          echo ""
+          echo "Triggering Multibranch Pipeline scan..."
+          SCAN_RESPONSE=$(curl -s -o /tmp/jenkins_scan.txt -w "%{http_code}" \
+            -X POST \
+            -u "$JENKINS_USER:$JENKINS_TOKEN" \
+            $CRUMB_HEADER \
+            "$JENKINS_URL/job/$JOB_NAME/scan")
+
+          echo "Scan Response: $SCAN_RESPONSE"
+
+          # Method 2: Directly trigger the branch build
+          echo ""
+          echo "Triggering branch build directly..."
+          BUILD_RESPONSE=$(curl -s -o /tmp/jenkins_build.txt -w "%{http_code}" \
+            -X POST \
+            -u "$JENKINS_USER:$JENKINS_TOKEN" \
+            $CRUMB_HEADER \
+            "$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/build")
+
+          echo "Build Response: $BUILD_RESPONSE"
+
+          # Check results
+          if [ "$SCAN_RESPONSE" -eq 200 ] || [ "$SCAN_RESPONSE" -eq 201 ] || [ "$SCAN_RESPONSE" -eq 302 ] || \
+             [ "$BUILD_RESPONSE" -eq 200 ] || [ "$BUILD_RESPONSE" -eq 201 ] || [ "$BUILD_RESPONSE" -eq 302 ]; then
+            echo ""
+            echo "Jenkins deployment triggered successfully!"
+          else
+            echo ""
+            echo "ERROR: Jenkins trigger failed"
+            echo "Scan response body:"
+            cat /tmp/jenkins_scan.txt 2>/dev/null | head -5
+            echo ""
+            echo "Build response body:"
+            cat /tmp/jenkins_build.txt 2>/dev/null | head -5
             exit 1
           fi
 
