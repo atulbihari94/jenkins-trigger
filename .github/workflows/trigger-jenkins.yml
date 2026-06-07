@@ -1,7 +1,8 @@
 name: CI/CD Pipeline
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - develop
       - qa-devops
@@ -10,6 +11,7 @@ jobs:
   detect-changes:
     name: Detect Changed Products
     runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
     outputs:
       one_changed: ${{ steps.changes.outputs.one_changed }}
       tim_changed: ${{ steps.changes.outputs.tim_changed }}
@@ -23,6 +25,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 2
 
       - name: Detect changes
@@ -77,7 +80,7 @@ jobs:
           echo "deploy_all=$DEPLOY_ALL" >> $GITHUB_OUTPUT
 
           echo "-----------------------------------"
-          echo "Branch:           ${{ github.ref_name }}"
+          echo "Branch:           ${{ github.event.pull_request.base.ref }}"
           echo "Common changed:   $COMMON"
           echo "SDK changed:      $SDK"
           echo "Deploy all:       $DEPLOY_ALL"
@@ -148,7 +151,7 @@ jobs:
   # ──────────────────────────────────────────────
 
   deploy-via-jenkins:
-    name: "Deploy via Jenkins - ${{ github.ref_name }}"
+    name: "Deploy via Jenkins - ${{ github.event.pull_request.base.ref }}"
     needs: [detect-changes, build-ONE, build-TIM, build-TIMPLUS, build-FLO]
     if: |
       always() &&
@@ -166,14 +169,16 @@ jobs:
           echo "========================================="
           echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
           echo "========================================="
-          echo "  Branch:    ${{ github.ref_name }}"
+          echo "  Branch:    ${{ github.event.pull_request.base.ref }}"
           echo "  Products:  ${{ needs.detect-changes.outputs.changed_products }}"
-          echo "  Commit:    ${{ github.sha }}"
-          echo "  Author:    ${{ github.actor }}"
+          echo "  PR:        #${{ github.event.pull_request.number }}"
+          echo "  Commit:    ${{ github.event.pull_request.merge_commit_sha }}"
+          echo "  Author:    ${{ github.event.pull_request.user.login }}"
           echo "========================================="
 
           JOB_NAME="event-bridge-monorepo-test-only"
-          BRANCH="${{ github.ref_name }}"
+          BRANCH="${{ github.event.pull_request.base.ref }}"
+          PRODUCTS="${{ needs.detect-changes.outputs.changed_products }}"
 
           # Get Jenkins crumb for CSRF protection
           echo "Getting Jenkins CRUMB..."
@@ -188,20 +193,9 @@ jobs:
             CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
           fi
 
-          # Method 1: Trigger Multibranch Pipeline scan (picks up new commits)
+          # Trigger the branch build directly
           echo ""
-          echo "Triggering Multibranch Pipeline scan..."
-          SCAN_RESPONSE=$(curl -s -o /tmp/jenkins_scan.txt -w "%{http_code}" \
-            -X POST \
-            -u "$JENKINS_USER:$JENKINS_TOKEN" \
-            $CRUMB_HEADER \
-            "$JENKINS_URL/job/$JOB_NAME/scan")
-
-          echo "Scan Response: $SCAN_RESPONSE"
-
-          # Method 2: Directly trigger the branch build
-          echo ""
-          echo "Triggering branch build directly..."
+          echo "Triggering branch build..."
           BUILD_RESPONSE=$(curl -s -o /tmp/jenkins_build.txt -w "%{http_code}" \
             -X POST \
             -u "$JENKINS_USER:$JENKINS_TOKEN" \
@@ -210,18 +204,13 @@ jobs:
 
           echo "Build Response: $BUILD_RESPONSE"
 
-          # Check results
-          if [ "$SCAN_RESPONSE" -eq 200 ] || [ "$SCAN_RESPONSE" -eq 201 ] || [ "$SCAN_RESPONSE" -eq 302 ] || \
-             [ "$BUILD_RESPONSE" -eq 200 ] || [ "$BUILD_RESPONSE" -eq 201 ] || [ "$BUILD_RESPONSE" -eq 302 ]; then
+          if [ "$BUILD_RESPONSE" -eq 200 ] || [ "$BUILD_RESPONSE" -eq 201 ] || [ "$BUILD_RESPONSE" -eq 302 ]; then
             echo ""
             echo "Jenkins deployment triggered successfully!"
+            echo "Products: $PRODUCTS"
           else
             echo ""
-            echo "ERROR: Jenkins trigger failed"
-            echo "Scan response body:"
-            cat /tmp/jenkins_scan.txt 2>/dev/null | head -5
-            echo ""
-            echo "Build response body:"
+            echo "ERROR: Jenkins trigger failed (HTTP $BUILD_RESPONSE)"
             cat /tmp/jenkins_build.txt 2>/dev/null | head -5
             exit 1
           fi
@@ -232,11 +221,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.event.pull_request.base.ref }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **PR** | #${{ github.event.pull_request.number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Common changed** | ${{ needs.detect-changes.outputs.common_changed }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **SDK changed** | ${{ needs.detect-changes.outputs.sdk_changed }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.event.pull_request.merge_commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
   #  NO CHANGES

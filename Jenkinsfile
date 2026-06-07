@@ -49,6 +49,11 @@ pipeline {
                     }
                     echo "  Products to deploy: ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
                     echo "============================================"
+
+                    // Set build display name with product info
+                    def productLabel = deployProducts.isEmpty() ? 'no-deploy' : deployProducts.join('+')
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} [${productLabel}]"
+                    currentBuild.description = "Products: ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
                 }
             }
         }
