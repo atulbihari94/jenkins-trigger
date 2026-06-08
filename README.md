@@ -1,158 +1,167 @@
-# Event Bridge Monorepo - CI/CD Pipeline
+# STM32 Firmware Monorepo — CI/CD Pipeline
 
 ## Overview
 
-This is a monorepo containing multiple firmware products (ONE, TIM, TIM+, FLO) with shared code (common/, sdk/). The CI/CD pipeline automatically detects which products have changes and deploys only those products — triggered exclusively when a Pull Request is merged.
+Monorepo containing multiple STM32 firmware products with shared code. The CI/CD pipeline **auto-discovers** products, detects changes via git diff, and deploys **only the products that changed**.
+
+- **Product folder changes** → automatic build & deploy
+- **Non-product changes only** (common/, sdk/, docs/, etc.) → manual deploy from Jenkins UI
+- **New products** → just create a folder under `products/` — no pipeline changes needed
 
 ## Repository Structure
 
 ```
-├── Jenkinsfile                    # Pipeline definition (smart deployment)
+├── Jenkinsfile                         # Calls STM32MonorepoPipeline shared library
 ├── .github/workflows/
-│   └── trigger-jenkins.yml        # GitHub Actions: build + trigger Jenkins
-├── products/
-│   ├── ONE/                       # ONE (FSO) product
-│   ├── TIM/                       # TIM product
-│   ├── TIM+/                      # TIM+ product
-│   └── FLO/                       # FLO product
-├── common/                        # Shared code (board, drivers, lora, platform)
-├── sdk/                           # Shared SDK (Drivers, Middlewares, Utilities)
-└── docs/
+│   └── trigger-jenkins.yml             # GitHub Actions: build + trigger Jenkins
+├── products/                           # ← Product folder (configurable name)
+│   ├── ONE/                            #   ONE (FSO) firmware
+│   │   ├── app/main.c
+│   │   ├── lora/lora_app.c
+│   │   └── tests/test/test_main.c
+│   ├── TIM/                            #   TIM firmware
+│   ├── TIM+/                           #   TIM+ firmware
+│   └── FLO/                            #   FLO firmware
+├── common/                             # Shared: board init, drivers, lora, platform
+├── sdk/                                # Vendor SDK: HAL, LoRaWAN stack, utilities
+└── docs/                               # Documentation
 ```
-
-## CI/CD Flow
-
-1. Developer creates a feature branch from `develop`
-2. Makes changes to product code, common code, or SDK
-3. Pushes the branch and creates a Pull Request targeting `develop`
-4. On PR merge → GitHub Actions triggers:
-   - Detects which product folders changed
-   - Runs build/test for affected products
-   - If all builds pass → triggers Jenkins deployment via API
-5. Jenkins runs the Jenkinsfile:
-   - Re-detects changed products from the merge commit
-   - Deploys only the affected products
-   - Sets build display name to show deployed products (e.g., `#15 [ONE+TIM+FLO]`)
-
-## Trigger Configuration
-
-Deployment **ONLY** triggers when a PR is merged. Direct pushes to `develop` are ignored.
-
-**File:** `.github/workflows/trigger-jenkins.yml`
-
-```yaml
-on:
-  pull_request:
-    types: [closed]       # fires when PR is closed
-    branches:
-      - develop           # target branch for DEV deployment
-      - qa-devops         # target branch for QA deployment
-```
-
-The `if: github.event.pull_request.merged == true` condition ensures only merged PRs (not closed/rejected PRs) trigger the pipeline.
 
 ## Deployment Logic
 
-| Changed Folder | Products Deployed |
+| What Changed | Build & Deploy | Mode |
+|---|---|---|
+| `products/ONE/` | ONE only | Auto |
+| `products/TIM/` + `products/FLO/` | TIM and FLO | Auto |
+| `products/ONE/` + `common/` | ONE only | Auto |
+| `products/ONE/` + `products/TIM/` + `sdk/` | ONE and TIM | Auto |
+| `common/` only | User selects from Jenkins UI | Manual |
+| `sdk/` only | User selects from Jenkins UI | Manual |
+| `common/` + `sdk/` + `docs/` | User selects from Jenkins UI | Manual |
+| `Jenkinsfile` or `README.md` only | User selects from Jenkins UI | Manual |
+
+**Key rule:** If any `products/<name>/` folder has changes, only those products auto-deploy. Everything outside `products/` is ignored for auto-deploy.
+
+## CI/CD Flow
+
+```
+Developer → PR to develop/qa-devops → Merge
+                                        │
+                    ┌───────────────────┤
+                    ▼                    ▼
+           GitHub Actions            Jenkins (Multibranch)
+           ─────────────            ────────────────────
+           1. Detect changes        1. Detect changes (git diff)
+           2. Build changed         2. Auto or Manual routing
+              products (matrix)     3. Build in STM32 Docker
+           3. Trigger Jenkins       4. Run unit tests
+              (if products          5. Upload .bin to S3
+               changed)            6. SCA scan
+```
+
+### GitHub Actions (`.github/workflows/trigger-jenkins.yml`)
+
+- Runs **only on PR merge** (not direct pushes)
+- Auto-discovers products from `products/` directory
+- Uses **dynamic matrix** to build only changed products in parallel
+- If product changes → triggers Jenkins deployment via API
+- If non-product changes only → shows "Manual Deploy Required" notice
+
+### Jenkins (`Jenkinsfile` → `STM32MonorepoPipeline` library)
+
+- Loads shared library from `wf-jenkins-lib`
+- Auto-discovers products from `products/` directory
+- Detects changes via `git diff HEAD~1 HEAD`
+- **Auto mode:** deploys changed products without user input
+- **Manual mode:** pauses pipeline, user selects which products to deploy
+- Builds each product inside STM32 Docker container
+- Uploads `.bin` firmware artifacts to S3
+
+## Configuration
+
+### Renaming the Products Folder
+
+If you need to rename `products/` to something else (e.g., `firmware/`):
+
+| File | What to Change |
 |---|---|
-| `products/ONE/` | ONE only |
-| `products/TIM/` | TIM only |
-| `products/TIM+/` | TIM+ only |
-| `products/FLO/` | FLO only |
-| `products/ONE/` + `products/FLO/` | ONE and FLO |
-| `common/` (any file) | ALL (ONE, TIM, TIM+, FLO) |
-| `sdk/` (any file) | ALL (ONE, TIM, TIM+, FLO) |
-| `Jenkinsfile`, `README.md`, etc. | NONE (no deployment) |
+| `Jenkinsfile` | `productsDir: 'firmware'` |
+| `trigger-jenkins.yml` | `PRODUCTS_DIR: firmware` |
 
-## Verified Test Results
+### Adding a New Product
 
-| Build # | Trigger | Changed | Jenkins Display | Result |
-|---|---|---|---|---|
-| #13 | Merge `feature/bump-one-firmware` | `products/ONE/` | `#13 [ONE]` | SUCCESS |
-| #14 | Merge `feature/bump-flo-firmware` | `products/FLO/` | `#14 [FLO]` | SUCCESS |
-| #15 | Merge `feature/update-common-drivers` | `common/` | `#15 [ONE+TIM+TIM++FLO]` | SUCCESS |
+1. Create a folder: `products/NEW_PRODUCT/`
+2. Add your firmware code inside it
+3. Done — the pipeline auto-discovers it
 
-## Setup Guide (New Repo / New Account)
+### Branches & Environments
+
+| Branch | Environment | Deploy Trigger |
+|---|---|---|
+| `develop` | Development | PR merge |
+| `qa-devops` | QA | PR merge |
+| `feature/*` | — | No auto-deploy |
+
+## Shared Library
+
+The pipeline logic lives in `wf-jenkins-lib` at `vars/STM32MonorepoPipeline.groovy`.
+
+```groovy
+// Jenkinsfile — this is all you need
+@Library('wf-jenkins-lib') _
+
+STM32MonorepoPipeline(
+    productsDir: 'products'
+)
+```
+
+### Library Configuration Options
+
+| Parameter | Default | Description |
+|---|---|---|
+| `productsDir` | `'products'` | Root folder containing product subdirectories |
+| `additionalChoiceParam` | `[:]` | Extra Jenkins job parameters |
+| `isTeamEnvironment` | `false` | Team environment flag |
+| `dockerImage` | STM32IDE image | Override Docker build image |
+
+## Setup Guide
 
 ### Prerequisites
 
-- A GitHub repository with the monorepo structure
-- A Jenkins instance with Multibranch Pipeline support
-- Jenkins user with API token capability
+- GitHub repository with monorepo structure
+- Jenkins Multibranch Pipeline job
+- `wf-jenkins-lib` configured as a Global Shared Library in Jenkins
 
-### Step 1: Jenkins Setup
+### GitHub Secrets Required
 
-1. Create a **Multibranch Pipeline** job in Jenkins
-2. Configure **Branch Sources** → Git:
-   - Repository URL: `https://github.com/<owner>/<repo>.git`
-   - Credentials: Add a GitHub PAT with `repo` scope
-3. Set **Discover branches** behavior
-4. Save and run "Scan Multibranch Pipeline Now"
+| Secret | Description |
+|---|---|
+| `JENKINS_URL` | Jenkins base URL (e.g., `https://build.afreespace.com`) |
+| `JENKINS_USER` | Jenkins user ID |
+| `JENKINS_TOKEN` | Jenkins API token |
 
-### Step 2: Generate Jenkins API Token
+### Jenkins Job Configuration
 
-1. Log in to Jenkins
-2. Go to your user profile → **Security** (URL: `/user/<your-id>/security/`)
-3. Under **API Token**, click "Add new Token"
-4. Generate and copy the token (it won't be shown again)
-5. Note your Jenkins user ID (visible in the URL — it may be a UUID for Azure AD users)
+1. Create **Multibranch Pipeline** → point to this repo
+2. Configure **Branch Sources** → Git with credentials
+3. The `Jenkinsfile` automatically uses the shared library
 
-### Step 3: GitHub Repository Secrets
+## Pending TODO
 
-Go to: `https://github.com/<owner>/<repo>/settings/secrets/actions`
-
-Add these repository secrets:
-
-| Secret | Value | Example |
-|---|---|---|
-| `JENKINS_URL` | Your Jenkins base URL | `https://build.afreespace.com` |
-| `JENKINS_USER` | Jenkins user ID | `4a7e14af-e679-4e49-8203-a9a027848cd7` |
-| `JENKINS_TOKEN` | Jenkins API token | `1129a413c78fedfeaf762e17d471c9bb57` |
-
-### Step 4: Add the Workflow and Jenkinsfile
-
-Copy these files into your repository:
-- `.github/workflows/trigger-jenkins.yml` — GitHub Actions workflow
-- `Jenkinsfile` — Jenkins pipeline definition
-
-Update the `JOB_NAME` variable in the workflow to match your Jenkins job name.
-
-### Step 5: Configure Branch Protection (Recommended)
-
-In GitHub repo settings → Branches → Add rule for `develop`:
-- Require pull request reviews before merging
-- Require status checks to pass (select the build jobs)
-- This ensures only reviewed, passing code gets deployed
-
-## Branches
-
-| Branch | Environment | Purpose |
-|---|---|---|
-| `develop` | Development | Auto-deploy on PR merge |
-| `qa-devops` | QA | Auto-deploy on PR merge |
-| `feature/*` | N/A | Development (no auto-deploy) |
-
-## Adding a New Product
-
-1. Create `products/NEW_PRODUCT/` folder with your code
-2. Add `'NEW_PRODUCT'` to the `allProducts` list in `Jenkinsfile`
-3. Add a new `stage('Deploy NEW_PRODUCT')` block in `Jenkinsfile`
-4. Add a new `build-NEW_PRODUCT` job in `.github/workflows/trigger-jenkins.yml`
-5. Add the detection logic in the `Detect changes` step
+- [ ] **Dockerfile:** Add real STM32 build Docker image
+- [ ] **Build commands:** Replace placeholder `make` commands with actual firmware toolchain
+- [ ] **Unit tests:** Configure C Unity test framework per product
+- [ ] **Library merge:** Merge `wf-jenkins-lib` branch `feature/stm32-monorepo` to master, then update `@Library` in Jenkinsfile
 
 ## Local Development
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
 git checkout develop
 git checkout -b feature/my-change
 
-# Make changes
-git add .
-git commit -m "Description of change"
+# Make changes to product code
+git add . && git commit -m "Update ONE firmware"
 git push origin feature/my-change
 
-# Create PR on GitHub targeting 'develop'
-# Merge PR → deployment triggers automatically
+# Create PR targeting develop → merge → auto-deploy
 ```

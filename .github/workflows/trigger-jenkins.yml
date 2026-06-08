@@ -1,9 +1,21 @@
-name: CI/CD Pipeline
-
-# ── Configuration ────────────────────────────────────────────────
-# To rename the products folder, update PRODUCTS_DIR below.
-# Products are auto-discovered from subdirectories — no hardcoding.
 # ─────────────────────────────────────────────────────────────────
+# CI/CD Pipeline — STM32 Firmware Monorepo
+# ─────────────────────────────────────────────────────────────────
+#
+# Triggered ONLY on PR merge to develop or qa-devops.
+# Products are auto-discovered from the PRODUCTS_DIR folder.
+#
+# Flow:
+#   1. detect-changes  → finds which product folders have changes
+#   2. build           → builds/tests only changed products (dynamic matrix)
+#   3. deploy          → triggers Jenkins if product changes exist
+#   4. manual-notice   → notifies if only non-product files changed
+#
+# To rename the products folder, update PRODUCTS_DIR below.
+# To add a new product, just create a folder under products/.
+# ─────────────────────────────────────────────────────────────────
+
+name: CI/CD Pipeline
 
 on:
   pull_request:
@@ -16,9 +28,8 @@ env:
   PRODUCTS_DIR: products
 
 jobs:
-  # ──────────────────────────────────────────────
-  #  DETECT which product folders changed
-  # ──────────────────────────────────────────────
+
+  # ── 1. DETECT which product folders changed ────────────────────
 
   detect-changes:
     name: Detect Changed Products
@@ -29,8 +40,7 @@ jobs:
       has_product_changes: ${{ steps.detect.outputs.has_product_changes }}
       non_product_only: ${{ steps.detect.outputs.non_product_only }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
@@ -40,16 +50,12 @@ jobs:
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
           echo "Changed files:"
           echo "$CHANGED_FILES"
-          echo ""
 
-          # Auto-discover all product folders
           ALL_PRODUCTS=""
           if [ -d "$PRODUCTS_DIR" ]; then
             ALL_PRODUCTS=$(ls -d $PRODUCTS_DIR/*/ 2>/dev/null | while read d; do basename "$d"; done | sort)
           fi
-          echo "Discovered products: $ALL_PRODUCTS"
 
-          # Find which product folders have changes
           CHANGED_PRODUCTS=""
           for product in $ALL_PRODUCTS; do
             if echo "$CHANGED_FILES" | grep -q "^${PRODUCTS_DIR}/${product}/"; then
@@ -57,21 +63,13 @@ jobs:
             fi
           done
 
-          # Check if there are non-product changes
           HAS_PRODUCT_CHANGES="false"
           NON_PRODUCT_ONLY="false"
+          [ -n "$CHANGED_PRODUCTS" ] && HAS_PRODUCT_CHANGES="true"
 
-          if [ -n "$CHANGED_PRODUCTS" ]; then
-            HAS_PRODUCT_CHANGES="true"
-          fi
-
-          # Check for any files outside the products dir
           HAS_NON_PRODUCT=$(echo "$CHANGED_FILES" | grep -v "^${PRODUCTS_DIR}/" | head -1)
-          if [ -n "$HAS_NON_PRODUCT" ] && [ "$HAS_PRODUCT_CHANGES" = "false" ]; then
-            NON_PRODUCT_ONLY="true"
-          fi
+          [ -n "$HAS_NON_PRODUCT" ] && [ "$HAS_PRODUCT_CHANGES" = "false" ] && NON_PRODUCT_ONLY="true"
 
-          # Build JSON array for matrix
           if [ -n "$CHANGED_PRODUCTS" ]; then
             PRODUCTS_JSON=$(echo "$CHANGED_PRODUCTS" | tr ',' '\n' | jq -R . | jq -s -c .)
           else
@@ -82,15 +80,13 @@ jobs:
           echo "has_product_changes=$HAS_PRODUCT_CHANGES" >> $GITHUB_OUTPUT
           echo "non_product_only=$NON_PRODUCT_ONLY" >> $GITHUB_OUTPUT
 
-          echo "-----------------------------------"
+          echo "---"
           echo "Branch:              ${{ github.event.pull_request.base.ref }}"
           echo "Has product changes: $HAS_PRODUCT_CHANGES"
           echo "Non-product only:    $NON_PRODUCT_ONLY"
           echo "Changed products:    $CHANGED_PRODUCTS"
 
-  # ──────────────────────────────────────────────
-  #  BUILD & TEST changed products (dynamic matrix)
-  # ──────────────────────────────────────────────
+  # ── 2. BUILD & TEST changed products (dynamic matrix) ─────────
 
   build:
     name: "Build: ${{ matrix.product }}"
@@ -102,24 +98,18 @@ jobs:
       matrix:
         product: ${{ fromJson(needs.detect-changes.outputs.changed_products) }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Build & Test ${{ matrix.product }}
         run: |
-          echo "======================================="
-          echo "  Building product: ${{ matrix.product }}"
-          echo "  Path: ${{ env.PRODUCTS_DIR }}/${{ matrix.product }}"
-          echo "======================================="
+          echo "Building: ${{ matrix.product }}"
+          # TODO: Replace with actual firmware build commands once Dockerfile is ready
           ls -la "${{ env.PRODUCTS_DIR }}/${{ matrix.product }}/"
           echo "${{ matrix.product }} build passed!"
 
-  # ──────────────────────────────────────────────
-  #  AUTO DEPLOY via Jenkins (product changes only)
-  # ──────────────────────────────────────────────
+  # ── 3. AUTO DEPLOY via Jenkins (product changes only) ──────────
 
   deploy-via-jenkins:
-    name: "Deploy via Jenkins - ${{ github.event.pull_request.base.ref }}"
+    name: "Deploy via Jenkins"
     needs: [detect-changes, build]
     if: |
       always() &&
@@ -128,74 +118,45 @@ jobs:
       needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Jenkins Deployment
+      - name: Trigger Jenkins
         env:
           JENKINS_URL: ${{ secrets.JENKINS_URL }}
           JENKINS_USER: ${{ secrets.JENKINS_USER }}
           JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
-          PRODUCTS='${{ needs.detect-changes.outputs.changed_products }}'
+          JOB_NAME="event-bridge-monorepo-test-only"
           BRANCH="${{ github.event.pull_request.base.ref }}"
 
-          echo "========================================="
-          echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
-          echo "========================================="
-          echo "  Branch:    $BRANCH"
-          echo "  Products:  $PRODUCTS"
-          echo "  Commit:    ${{ github.sha }}"
-          echo "  Author:    ${{ github.actor }}"
-          echo "========================================="
+          echo "Triggering Jenkins: $JOB_NAME/$BRANCH"
 
-          JOB_NAME="event-bridge-monorepo-test-only"
-
-          # Get Jenkins crumb for CSRF protection
-          echo "Getting Jenkins CRUMB..."
           CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | jq -r '.crumb // empty')
 
-          if [ -z "$CRUMB" ]; then
-            echo "Warning: Could not get CRUMB, trying without it..."
-            CRUMB_HEADER=""
-          else
-            echo "Got CRUMB successfully"
-            CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
-          fi
+          CRUMB_HEADER=""
+          [ -n "$CRUMB" ] && CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
 
-          # Trigger the branch build
-          echo ""
-          echo "Triggering branch build..."
-          BUILD_RESPONSE=$(curl -s -o /tmp/jenkins_build.txt -w "%{http_code}" \
-            -X POST \
-            -u "$JENKINS_USER:$JENKINS_TOKEN" \
-            $CRUMB_HEADER \
+          RESPONSE=$(curl -s -o /tmp/jenkins.txt -w "%{http_code}" \
+            -X POST -u "$JENKINS_USER:$JENKINS_TOKEN" $CRUMB_HEADER \
             "$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/build")
 
-          echo "Build Response: $BUILD_RESPONSE"
-
-          if [ "$BUILD_RESPONSE" -eq 200 ] || [ "$BUILD_RESPONSE" -eq 201 ] || [ "$BUILD_RESPONSE" -eq 302 ]; then
-            echo ""
-            echo "Jenkins deployment triggered successfully!"
-            echo "Products: $PRODUCTS"
+          if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 302 ]; then
+            echo "Jenkins triggered successfully!"
           else
-            echo ""
-            echo "ERROR: Jenkins trigger failed (HTTP $BUILD_RESPONSE)"
-            cat /tmp/jenkins_build.txt 2>/dev/null | head -5
+            echo "ERROR: Jenkins trigger failed (HTTP $RESPONSE)"
+            cat /tmp/jenkins.txt 2>/dev/null | head -5
             exit 1
           fi
 
       - name: Summary
         run: |
           echo "## Deployment Triggered" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ github.event.pull_request.base.ref }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ──────────────────────────────────────────────
-  #  NON-PRODUCT CHANGES — manual deploy from Jenkins UI
-  # ──────────────────────────────────────────────
+  # ── 4. NON-PRODUCT CHANGES — manual deploy from Jenkins UI ────
 
   manual-deploy-notice:
     name: Manual Deploy Required
@@ -203,22 +164,13 @@ jobs:
     if: needs.detect-changes.outputs.non_product_only == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Notify
-        run: |
-          echo "======================================="
-          echo "  NON-PRODUCT CHANGES ONLY"
-          echo "  No product folders were modified."
-          echo "  Deploy manually from Jenkins UI."
-          echo "======================================="
+      - run: |
+          echo "Only non-product files changed. Deploy manually from Jenkins UI."
           echo "## Manual Deploy Required" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "Only non-product files were changed. No automatic deployment." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "To deploy, trigger the Jenkins job manually and select the products to deploy." >> $GITHUB_STEP_SUMMARY
+          echo "To deploy, trigger the Jenkins job manually." >> $GITHUB_STEP_SUMMARY
 
-  # ──────────────────────────────────────────────
-  #  NO CHANGES AT ALL
-  # ──────────────────────────────────────────────
+  # ── 5. NO RELEVANT CHANGES ────────────────────────────────────
 
   skip-notification:
     name: No Changes
@@ -228,7 +180,6 @@ jobs:
       needs.detect-changes.outputs.non_product_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Skip
-        run: |
-          echo "No relevant changes detected. Skipping."
+      - run: |
+          echo "No relevant changes detected."
           echo "## No Build Needed" >> $GITHUB_STEP_SUMMARY
