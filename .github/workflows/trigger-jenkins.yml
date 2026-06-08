@@ -159,7 +159,17 @@ jobs:
             *)         TARGET_ENV="dev" ;;
           esac
 
-          echo "Triggering Jenkins: $JOB_NAME/$BRANCH (AUTO_DEPLOY=true, TARGET_ENV=$TARGET_ENV)"
+          # Pass changed product(s) so Jenkins skips manual-only DEPLOY_PRODUCT check
+          CHANGED='${{ needs.detect-changes.outputs.changed_products }}'
+          PRODUCT_COUNT=$(echo "$CHANGED" | jq 'length')
+          if [ "$PRODUCT_COUNT" -gt 1 ]; then
+            DEPLOY_PRODUCT="ALL"
+          else
+            DEPLOY_PRODUCT=$(echo "$CHANGED" | jq -r '.[0]')
+          fi
+          DEPLOY_PRODUCT_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DEPLOY_PRODUCT}'))")
+
+          echo "Triggering Jenkins: $JOB_NAME/$BRANCH (DEPLOY_PRODUCT=$DEPLOY_PRODUCT, TARGET_ENV=$TARGET_ENV)"
 
           CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | jq -r '.crumb // empty')
@@ -168,7 +178,7 @@ jobs:
           [ -n "$CRUMB" ] && CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
 
           BUILD_URL="$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/buildWithParameters"
-          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&AUTO_DEPLOY=true"
+          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&DEPLOY_PRODUCT=${DEPLOY_PRODUCT_ENC}"
 
           RESPONSE=$(curl -s -o /tmp/jenkins.txt -w "%{http_code}" \
             -X POST -u "$JENKINS_USER:$JENKINS_TOKEN" $CRUMB_HEADER \
