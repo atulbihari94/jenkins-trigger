@@ -1,5 +1,10 @@
 name: CI/CD Pipeline
 
+# ── Configuration ────────────────────────────────────────────────
+# To rename the products folder, update PRODUCTS_DIR below.
+# Products are auto-discovered from subdirectories — no hardcoding.
+# ─────────────────────────────────────────────────────────────────
+
 on:
   pull_request:
     types: [closed]
@@ -7,20 +12,22 @@ on:
       - develop
       - qa-devops
 
+env:
+  PRODUCTS_DIR: products
+
 jobs:
+  # ──────────────────────────────────────────────
+  #  DETECT which product folders changed
+  # ──────────────────────────────────────────────
+
   detect-changes:
     name: Detect Changed Products
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     outputs:
-      one_changed: ${{ steps.changes.outputs.one_changed }}
-      tim_changed: ${{ steps.changes.outputs.tim_changed }}
-      timplus_changed: ${{ steps.changes.outputs.timplus_changed }}
-      flo_changed: ${{ steps.changes.outputs.flo_changed }}
-      common_changed: ${{ steps.changes.outputs.common_changed }}
-      sdk_changed: ${{ steps.changes.outputs.sdk_changed }}
-      changed_products: ${{ steps.changes.outputs.changed_products }}
-      deploy_all: ${{ steps.changes.outputs.deploy_all }}
+      changed_products: ${{ steps.detect.outputs.changed_products }}
+      has_product_changes: ${{ steps.detect.outputs.has_product_changes }}
+      non_product_only: ${{ steps.detect.outputs.non_product_only }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,135 +35,97 @@ jobs:
           fetch-depth: 2
 
       - name: Detect changes
-        id: changes
+        id: detect
         run: |
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
           echo "Changed files:"
           echo "$CHANGED_FILES"
+          echo ""
 
-          ONE="false"; TIM="false"; TIMPLUS="false"; FLO="false"
-          COMMON="false"; SDK="false"; DEPLOY_ALL="false"
-          PRODUCTS=""
-
-          # Check shared folders first
-          if echo "$CHANGED_FILES" | grep -q "^common/"; then
-            COMMON="true"; DEPLOY_ALL="true"
+          # Auto-discover all product folders
+          ALL_PRODUCTS=""
+          if [ -d "$PRODUCTS_DIR" ]; then
+            ALL_PRODUCTS=$(ls -d $PRODUCTS_DIR/*/ 2>/dev/null | while read d; do basename "$d"; done | sort)
           fi
-          if echo "$CHANGED_FILES" | grep -q "^sdk/"; then
-            SDK="true"; DEPLOY_ALL="true"
+          echo "Discovered products: $ALL_PRODUCTS"
+
+          # Find which product folders have changes
+          CHANGED_PRODUCTS=""
+          for product in $ALL_PRODUCTS; do
+            if echo "$CHANGED_FILES" | grep -q "^${PRODUCTS_DIR}/${product}/"; then
+              [ -n "$CHANGED_PRODUCTS" ] && CHANGED_PRODUCTS="$CHANGED_PRODUCTS,$product" || CHANGED_PRODUCTS="$product"
+            fi
+          done
+
+          # Check if there are non-product changes
+          HAS_PRODUCT_CHANGES="false"
+          NON_PRODUCT_ONLY="false"
+
+          if [ -n "$CHANGED_PRODUCTS" ]; then
+            HAS_PRODUCT_CHANGES="true"
           fi
 
-          if [ "$DEPLOY_ALL" = "true" ]; then
-            ONE="true"; TIM="true"; TIMPLUS="true"; FLO="true"
-            PRODUCTS="ONE,TIM,TIM+,FLO"
-            echo ">> SHARED CODE (common/ or sdk/) changed — ALL products will be built & deployed"
+          # Check for any files outside the products dir
+          HAS_NON_PRODUCT=$(echo "$CHANGED_FILES" | grep -v "^${PRODUCTS_DIR}/" | head -1)
+          if [ -n "$HAS_NON_PRODUCT" ] && [ "$HAS_PRODUCT_CHANGES" = "false" ]; then
+            NON_PRODUCT_ONLY="true"
+          fi
+
+          # Build JSON array for matrix
+          if [ -n "$CHANGED_PRODUCTS" ]; then
+            PRODUCTS_JSON=$(echo "$CHANGED_PRODUCTS" | tr ',' '\n' | jq -R . | jq -s -c .)
           else
-            if echo "$CHANGED_FILES" | grep -q "^products/ONE/"; then
-              ONE="true"
-              PRODUCTS="ONE"
-            fi
-            if echo "$CHANGED_FILES" | grep -q "^products/TIM/"; then
-              TIM="true"
-              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,TIM" || PRODUCTS="TIM"
-            fi
-            if echo "$CHANGED_FILES" | grep -q "^products/TIM+/"; then
-              TIMPLUS="true"
-              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,TIM+" || PRODUCTS="TIM+"
-            fi
-            if echo "$CHANGED_FILES" | grep -q "^products/FLO/"; then
-              FLO="true"
-              [ -n "$PRODUCTS" ] && PRODUCTS="$PRODUCTS,FLO" || PRODUCTS="FLO"
-            fi
+            PRODUCTS_JSON='[]'
           fi
 
-          echo "one_changed=$ONE" >> $GITHUB_OUTPUT
-          echo "tim_changed=$TIM" >> $GITHUB_OUTPUT
-          echo "timplus_changed=$TIMPLUS" >> $GITHUB_OUTPUT
-          echo "flo_changed=$FLO" >> $GITHUB_OUTPUT
-          echo "common_changed=$COMMON" >> $GITHUB_OUTPUT
-          echo "sdk_changed=$SDK" >> $GITHUB_OUTPUT
-          echo "changed_products=$PRODUCTS" >> $GITHUB_OUTPUT
-          echo "deploy_all=$DEPLOY_ALL" >> $GITHUB_OUTPUT
+          echo "changed_products=$PRODUCTS_JSON" >> $GITHUB_OUTPUT
+          echo "has_product_changes=$HAS_PRODUCT_CHANGES" >> $GITHUB_OUTPUT
+          echo "non_product_only=$NON_PRODUCT_ONLY" >> $GITHUB_OUTPUT
 
           echo "-----------------------------------"
-          echo "Branch:           ${{ github.event.pull_request.base.ref }}"
-          echo "Common changed:   $COMMON"
-          echo "SDK changed:      $SDK"
-          echo "Deploy all:       $DEPLOY_ALL"
-          echo "Products:         $PRODUCTS"
+          echo "Branch:              ${{ github.event.pull_request.base.ref }}"
+          echo "Has product changes: $HAS_PRODUCT_CHANGES"
+          echo "Non-product only:    $NON_PRODUCT_ONLY"
+          echo "Changed products:    $CHANGED_PRODUCTS"
 
   # ──────────────────────────────────────────────
-  #  BUILD & TEST per product (GitHub Actions)
+  #  BUILD & TEST changed products (dynamic matrix)
   # ──────────────────────────────────────────────
 
-  build-ONE:
-    name: "Build: ONE (FSO)"
+  build:
+    name: "Build: ${{ matrix.product }}"
     needs: detect-changes
-    if: needs.detect-changes.outputs.one_changed == 'true'
+    if: needs.detect-changes.outputs.has_product_changes == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        product: ${{ fromJson(needs.detect-changes.outputs.changed_products) }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Build & Test ONE
-        run: |
-          echo "Building product ONE (FSO)..."
-          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/ONE/ changed' }}"
-          ls -la products/ONE/app/
-          echo "ONE build passed!"
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  build-TIM:
-    name: "Build: TIM"
-    needs: detect-changes
-    if: needs.detect-changes.outputs.tim_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build & Test TIM
+      - name: Build & Test ${{ matrix.product }}
         run: |
-          echo "Building product TIM..."
-          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/TIM/ changed' }}"
-          ls -la products/TIM/app/
-          echo "TIM build passed!"
-
-  build-TIMPLUS:
-    name: "Build: TIM+"
-    needs: detect-changes
-    if: needs.detect-changes.outputs.timplus_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build & Test TIM+
-        run: |
-          echo "Building product TIM+..."
-          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/TIM+/ changed' }}"
-          ls -la "products/TIM+/app/"
-          echo "TIM+ build passed!"
-
-  build-FLO:
-    name: "Build: FLO"
-    needs: detect-changes
-    if: needs.detect-changes.outputs.flo_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build & Test FLO
-        run: |
-          echo "Building product FLO..."
-          echo "Reason: ${{ needs.detect-changes.outputs.deploy_all == 'true' && 'shared code changed' || 'products/FLO/ changed' }}"
-          ls -la products/FLO/app/
-          echo "FLO build passed!"
+          echo "======================================="
+          echo "  Building product: ${{ matrix.product }}"
+          echo "  Path: ${{ env.PRODUCTS_DIR }}/${{ matrix.product }}"
+          echo "======================================="
+          ls -la "${{ env.PRODUCTS_DIR }}/${{ matrix.product }}/"
+          echo "${{ matrix.product }} build passed!"
 
   # ──────────────────────────────────────────────
-  #  DEPLOY via Jenkins (only after builds pass)
+  #  AUTO DEPLOY via Jenkins (product changes only)
   # ──────────────────────────────────────────────
 
   deploy-via-jenkins:
     name: "Deploy via Jenkins - ${{ github.event.pull_request.base.ref }}"
-    needs: [detect-changes, build-ONE, build-TIM, build-TIMPLUS, build-FLO]
+    needs: [detect-changes, build]
     if: |
       always() &&
-      needs.detect-changes.outputs.changed_products != '' &&
+      needs.detect-changes.outputs.has_product_changes == 'true' &&
       needs.detect-changes.result == 'success' &&
-      !(needs.build-ONE.result == 'failure' || needs.build-TIM.result == 'failure' || needs.build-TIMPLUS.result == 'failure' || needs.build-FLO.result == 'failure')
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Jenkins Deployment
@@ -165,18 +134,19 @@ jobs:
           JENKINS_USER: ${{ secrets.JENKINS_USER }}
           JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
+          PRODUCTS='${{ needs.detect-changes.outputs.changed_products }}'
+          BRANCH="${{ github.event.pull_request.base.ref }}"
+
           echo "========================================="
           echo "  ALL BUILDS PASSED — TRIGGERING DEPLOY"
           echo "========================================="
-          echo "  Branch:    ${{ github.event.pull_request.base.ref }}"
-          echo "  Products:  ${{ needs.detect-changes.outputs.changed_products }}"
+          echo "  Branch:    $BRANCH"
+          echo "  Products:  $PRODUCTS"
           echo "  Commit:    ${{ github.sha }}"
           echo "  Author:    ${{ github.actor }}"
           echo "========================================="
 
           JOB_NAME="event-bridge-monorepo-test-only"
-          BRANCH="${{ github.event.pull_request.base.ref }}"
-          PRODUCTS="${{ needs.detect-changes.outputs.changed_products }}"
 
           # Get Jenkins crumb for CSRF protection
           echo "Getting Jenkins CRUMB..."
@@ -191,7 +161,7 @@ jobs:
             CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
           fi
 
-          # Trigger the branch build directly
+          # Trigger the branch build
           echo ""
           echo "Triggering branch build..."
           BUILD_RESPONSE=$(curl -s -o /tmp/jenkins_build.txt -w "%{http_code}" \
@@ -221,21 +191,44 @@ jobs:
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ github.event.pull_request.base.ref }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Common changed** | ${{ needs.detect-changes.outputs.common_changed }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **SDK changed** | ${{ needs.detect-changes.outputs.sdk_changed }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
-  #  NO CHANGES
+  #  NON-PRODUCT CHANGES — manual deploy from Jenkins UI
+  # ──────────────────────────────────────────────
+
+  manual-deploy-notice:
+    name: Manual Deploy Required
+    needs: detect-changes
+    if: needs.detect-changes.outputs.non_product_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify
+        run: |
+          echo "======================================="
+          echo "  NON-PRODUCT CHANGES ONLY"
+          echo "  No product folders were modified."
+          echo "  Deploy manually from Jenkins UI."
+          echo "======================================="
+          echo "## Manual Deploy Required" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Only non-product files were changed. No automatic deployment." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To deploy, trigger the Jenkins job manually and select the products to deploy." >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  #  NO CHANGES AT ALL
   # ──────────────────────────────────────────────
 
   skip-notification:
-    name: No Product Changes
+    name: No Changes
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed_products == ''
+    if: |
+      needs.detect-changes.outputs.has_product_changes != 'true' &&
+      needs.detect-changes.outputs.non_product_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Skip
         run: |
-          echo "No changes in product folders or shared code. Skipping."
+          echo "No relevant changes detected. Skipping."
           echo "## No Build Needed" >> $GITHUB_STEP_SUMMARY
