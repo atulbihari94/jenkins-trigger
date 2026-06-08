@@ -2,7 +2,7 @@
 #include "board_config.h"
 
 #define PRODUCT_NAME "FLO"
-#define FIRMWARE_VERSION "1.6.1"
+#define FIRMWARE_VERSION "1.6.2"
 
 int main(void) {
     Board_Init();
