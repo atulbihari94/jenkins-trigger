@@ -159,7 +159,7 @@ jobs:
             *)         TARGET_ENV="dev" ;;
           esac
 
-          echo "Triggering Jenkins: $JOB_NAME/$BRANCH (TARGET_ENV=$TARGET_ENV, DEPLOY_PRODUCT=None)"
+          echo "Triggering Jenkins: $JOB_NAME/$BRANCH (AUTO_DEPLOY=true, TARGET_ENV=$TARGET_ENV)"
 
           CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | jq -r '.crumb // empty')
@@ -168,7 +168,7 @@ jobs:
           [ -n "$CRUMB" ] && CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
 
           BUILD_URL="$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/buildWithParameters"
-          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&DEPLOY_PRODUCT=None"
+          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&AUTO_DEPLOY=true"
 
           RESPONSE=$(curl -s -o /tmp/jenkins.txt -w "%{http_code}" \
             -X POST -u "$JENKINS_USER:$JENKINS_TOKEN" $CRUMB_HEADER \
