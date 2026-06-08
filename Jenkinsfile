@@ -1,144 +1,60 @@
-def deployProducts = []
-def commonChanged = false
-def sdkChanged = false
-def allProducts = ['ONE', 'TIM', 'TIM+', 'FLO']
+/*
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │                    STM32 MONOREPO PIPELINE                             │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │                                                                       │
+ * │  This Jenkinsfile calls the STM32MonorepoPipeline shared library      │
+ * │  from wf-jenkins-lib. All pipeline logic lives in the library.        │
+ * │                                                                       │
+ * │  WHAT THIS REPO DOES (jenkins-trigger):                               │
+ * │  ─────────────────────────────────────                                │
+ * │  1. GitHub Actions (.github/workflows/trigger-jenkins.yml):           │
+ * │     - Runs on PR merge to develop / qa-devops                         │
+ * │     - Auto-discovers product folders from products/ directory         │
+ * │     - Builds only the products that have changes (dynamic matrix)     │
+ * │     - If product changes exist → triggers Jenkins deployment          │
+ * │     - If only non-product changes → shows "Manual Deploy" notice      │
+ * │                                                                       │
+ * │  2. Jenkinsfile (this file → STM32MonorepoPipeline library):          │
+ * │     - Auto-discovers products from products/ directory                │
+ * │     - Detects changes via git diff                                    │
+ * │     - Product folder changes → AUTO deploys those products            │
+ * │     - Non-product changes only → MANUAL deploy (user selects)         │
+ * │     - Builds firmware in STM32 Docker container                       │
+ * │     - Runs unit tests per product                                     │
+ * │     - Uploads .bin artifacts to S3                                    │
+ * │     - Runs SCA scan                                                   │
+ * │                                                                       │
+ * │  WHEN DOES EACH PRODUCT BUILD:                                        │
+ * │  ─────────────────────────────                                        │
+ * │  products/ONE/ changed     → auto-build & deploy ONE only             │
+ * │  products/TIM/ changed     → auto-build & deploy TIM only             │
+ * │  products/TIM+/ changed    → auto-build & deploy TIM+ only            │
+ * │  products/FLO/ changed     → auto-build & deploy FLO only             │
+ * │  products/ONE/ + TIM/      → auto-build & deploy ONE and TIM          │
+ * │  products/ONE/ + common/   → auto-build & deploy ONE only             │
+ * │  common/ or sdk/ only      → MANUAL deploy (user picks products)      │
+ * │  Jenkinsfile or docs/ only → MANUAL deploy (user picks products)      │
+ * │  New folder in products/   → auto-discovered, no code changes needed  │
+ * │                                                                       │
+ * │  TODO (pending):                                                      │
+ * │  ────────────────                                                     │
+ * │  - [ ] Add real Dockerfile for STM32 build environment                │
+ * │  - [ ] Configure actual firmware build commands (make/cmake)          │
+ * │  - [ ] Set up C Unity test framework per product                      │
+ * │  - [ ] Merge wf-jenkins-lib feature/stm32-monorepo to master,        │
+ * │        then change @Library below to @Library('wf-jenkins-lib') _     │
+ * │                                                                       │
+ * │  CONFIGURATION:                                                       │
+ * │  ──────────────                                                       │
+ * │  To rename the products folder: change productsDir below.             │
+ * │  To add a new product: just create a folder under products/.          │
+ * │                                                                       │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ */
 
-pipeline {
-    agent any
+@Library('wf-jenkins-lib@feature/stm32-monorepo') _
 
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Detect Changes') {
-            steps {
-                script {
-                    def changes = sh(
-                        script: "git diff --name-only HEAD~1 HEAD 2>/dev/null || echo ''",
-                        returnStdout: true
-                    ).trim()
-
-                    def changedFiles = changes ? changes.split('\n') : []
-
-                    commonChanged = changedFiles.any { it.startsWith("common/") }
-                    sdkChanged = changedFiles.any { it.startsWith("sdk/") }
-
-                    if (commonChanged || sdkChanged) {
-                        deployProducts = allProducts.collect()
-                    } else {
-                        allProducts.each { product ->
-                            if (changedFiles.any { it.startsWith("products/${product}/") }) {
-                                deployProducts.add(product)
-                            }
-                        }
-                    }
-
-                    echo "============================================"
-                    echo "  DEPLOYMENT PIPELINE"
-                    echo "============================================"
-                    echo "  Branch:             ${env.BRANCH_NAME}"
-                    echo "  Common changed:     ${commonChanged}"
-                    echo "  SDK changed:        ${sdkChanged}"
-                    echo "  Changed files:"
-                    changedFiles.each { echo "    - ${it}" }
-                    if (commonChanged || sdkChanged) {
-                        echo "  >> SHARED CODE changed - deploying ALL products"
-                    }
-                    echo "  Products to deploy: ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
-                    echo "============================================"
-
-                    // Set build display name with product info
-                    def productLabel = deployProducts.isEmpty() ? 'no-deploy' : deployProducts.join('+')
-                    currentBuild.displayName = "#${env.BUILD_NUMBER} [${productLabel}]"
-                    currentBuild.description = "Products: ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
-                }
-            }
-        }
-
-        stage('Deploy ONE') {
-            when {
-                expression { return deployProducts.contains('ONE') }
-            }
-            steps {
-                echo "============================================"
-                echo "  DEPLOYING: ONE (FSO)"
-                echo "  Environment: ${env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'}"
-                echo "============================================"
-                // sh "cd products/ONE && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-            }
-        }
-
-        stage('Deploy TIM') {
-            when {
-                expression { return deployProducts.contains('TIM') }
-            }
-            steps {
-                echo "============================================"
-                echo "  DEPLOYING: TIM"
-                echo "  Environment: ${env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'}"
-                echo "============================================"
-                // sh "cd products/TIM && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-            }
-        }
-
-        stage('Deploy TIM+') {
-            when {
-                expression { return deployProducts.contains('TIM+') }
-            }
-            steps {
-                echo "============================================"
-                echo "  DEPLOYING: TIM+"
-                echo "  Environment: ${env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'}"
-                echo "============================================"
-                // sh "cd 'products/TIM+' && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-            }
-        }
-
-        stage('Deploy FLO') {
-            when {
-                expression { return deployProducts.contains('FLO') }
-            }
-            steps {
-                echo "============================================"
-                echo "  DEPLOYING: FLO"
-                echo "  Environment: ${env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'}"
-                echo "============================================"
-                // sh "cd products/FLO && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-            }
-        }
-
-        stage('No Changes') {
-            when {
-                expression { return deployProducts.isEmpty() }
-            }
-            steps {
-                echo "============================================"
-                echo "  NO PRODUCT CHANGES DETECTED"
-                echo "  Only non-product files were modified."
-                echo "  Skipping deployment."
-                echo "============================================"
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "============================================"
-            echo "  PIPELINE COMPLETE"
-            echo "  Branch:         ${env.BRANCH_NAME}"
-            echo "  Common changed: ${commonChanged}"
-            echo "  SDK changed:    ${sdkChanged}"
-            echo "  Deployed:       ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
-            echo "============================================"
-        }
-        failure {
-            echo "============================================"
-            echo "  PIPELINE FAILED"
-            echo "  Branch: ${env.BRANCH_NAME}"
-            echo "============================================"
-        }
-    }
-}
+STM32MonorepoPipeline(
+    productsDir: 'products'
+)
