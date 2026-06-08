@@ -152,7 +152,14 @@ jobs:
           JOB_NAME="event-bridge-monorepo-test-only"
           BRANCH="${{ github.event.pull_request.base.ref }}"
 
-          echo "Triggering Jenkins: $JOB_NAME/$BRANCH"
+          # Map branch to TARGET_ENV (job requires buildWithParameters)
+          case "$BRANCH" in
+            develop)   TARGET_ENV="dev" ;;
+            qa-devops) TARGET_ENV="qa" ;;
+            *)         TARGET_ENV="dev" ;;
+          esac
+
+          echo "Triggering Jenkins: $JOB_NAME/$BRANCH (TARGET_ENV=$TARGET_ENV, DEPLOY_PRODUCT=None)"
 
           CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | jq -r '.crumb // empty')
@@ -160,9 +167,12 @@ jobs:
           CRUMB_HEADER=""
           [ -n "$CRUMB" ] && CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
 
+          BUILD_URL="$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/buildWithParameters"
+          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&DEPLOY_PRODUCT=None"
+
           RESPONSE=$(curl -s -o /tmp/jenkins.txt -w "%{http_code}" \
             -X POST -u "$JENKINS_USER:$JENKINS_TOKEN" $CRUMB_HEADER \
-            "$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/build")
+            "$BUILD_URL")
 
           if [ "$RESPONSE" -eq 200 ] || [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 302 ]; then
             echo "Jenkins triggered successfully!"
