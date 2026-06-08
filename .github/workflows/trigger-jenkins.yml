@@ -2,17 +2,26 @@
 # CI/CD Pipeline — STM32 Firmware Monorepo
 # ─────────────────────────────────────────────────────────────────
 #
-# Triggered ONLY on PR merge to develop or qa-devops.
-# Products are auto-discovered from the PRODUCTS_DIR folder.
+# TRIGGER:
+#   Only runs when a PR is merged to develop or qa-devops.
+#   Direct pushes are ignored (github.event.pull_request.merged == true).
 #
-# Flow:
-#   1. detect-changes  → finds which product folders have changes
-#   2. build           → builds/tests only changed products (dynamic matrix)
-#   3. deploy          → triggers Jenkins if product changes exist
-#   4. manual-notice   → notifies if only non-product files changed
+# CHANGE DETECTION:
+#   Uses `git diff HEAD~1 HEAD` to compare the merge commit with its
+#   parent. This gives us all files changed in the merged PR.
+#   That's why fetch-depth is 2 — we need 2 commits (merge + parent).
+#   Products are auto-discovered from PRODUCTS_DIR subdirectories.
 #
-# To rename the products folder, update PRODUCTS_DIR below.
-# To add a new product, just create a folder under products/.
+# FLOW:
+#   1. detect-changes    → git diff, classify product vs non-product
+#   2. build (matrix)    → build only changed products in parallel
+#   3. deploy-via-jenkins→ trigger Jenkins if products changed
+#   4. manual-notice     → notify if only non-product files changed
+#   5. skip              → if no relevant changes at all
+#
+# CONFIGURATION:
+#   To rename the products folder, update PRODUCTS_DIR below.
+#   To add a new product, just create a folder under products/.
 # ─────────────────────────────────────────────────────────────────
 
 name: CI/CD Pipeline
@@ -30,6 +39,10 @@ env:
 jobs:
 
   # ── 1. DETECT which product folders changed ────────────────────
+  #
+  # Uses git diff to compare merge commit (HEAD) with its parent (HEAD~1).
+  # fetch-depth: 2 ensures we have both commits available.
+  # Products are auto-discovered by listing PRODUCTS_DIR subdirectories.
 
   detect-changes:
     name: Detect Changed Products
@@ -51,11 +64,13 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
+          # Auto-discover product folders (no hardcoding)
           ALL_PRODUCTS=""
           if [ -d "$PRODUCTS_DIR" ]; then
             ALL_PRODUCTS=$(ls -d $PRODUCTS_DIR/*/ 2>/dev/null | while read d; do basename "$d"; done | sort)
           fi
 
+          # Match changed files to product folders
           CHANGED_PRODUCTS=""
           for product in $ALL_PRODUCTS; do
             if echo "$CHANGED_FILES" | grep -q "^${PRODUCTS_DIR}/${product}/"; then
@@ -67,9 +82,11 @@ jobs:
           NON_PRODUCT_ONLY="false"
           [ -n "$CHANGED_PRODUCTS" ] && HAS_PRODUCT_CHANGES="true"
 
+          # Any file outside PRODUCTS_DIR/ is a non-product change
           HAS_NON_PRODUCT=$(echo "$CHANGED_FILES" | grep -v "^${PRODUCTS_DIR}/" | head -1)
           [ -n "$HAS_NON_PRODUCT" ] && [ "$HAS_PRODUCT_CHANGES" = "false" ] && NON_PRODUCT_ONLY="true"
 
+          # Build JSON array for dynamic matrix strategy
           if [ -n "$CHANGED_PRODUCTS" ]; then
             PRODUCTS_JSON=$(echo "$CHANGED_PRODUCTS" | tr ',' '\n' | jq -R . | jq -s -c .)
           else
@@ -86,7 +103,11 @@ jobs:
           echo "Non-product only:    $NON_PRODUCT_ONLY"
           echo "Changed products:    $CHANGED_PRODUCTS"
 
-  # ── 2. BUILD & TEST changed products (dynamic matrix) ─────────
+  # ── 2. BUILD only changed products (dynamic matrix) ────────────
+  #
+  # Uses fromJson() to create a matrix from the detected products.
+  # Each product builds in a separate parallel runner.
+  # fail-fast: false ensures one product failure doesn't cancel others.
 
   build:
     name: "Build: ${{ matrix.product }}"
@@ -106,7 +127,11 @@ jobs:
           ls -la "${{ env.PRODUCTS_DIR }}/${{ matrix.product }}/"
           echo "${{ matrix.product }} build passed!"
 
-  # ── 3. AUTO DEPLOY via Jenkins (product changes only) ──────────
+  # ── 3. TRIGGER Jenkins (only when products changed) ────────────
+  #
+  # Runs after all product builds pass.
+  # Triggers the Jenkins Multibranch Pipeline job via REST API.
+  # Jenkins then runs STM32MonorepoPipeline which handles the actual deploy.
 
   deploy-via-jenkins:
     name: "Deploy via Jenkins"
@@ -156,7 +181,11 @@ jobs:
           echo "| **Products** | \`${{ needs.detect-changes.outputs.changed_products }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── 4. NON-PRODUCT CHANGES — manual deploy from Jenkins UI ────
+  # ── 4. NON-PRODUCT CHANGES — no auto-deploy ───────────────────
+  #
+  # When only files outside products/ changed (common/, sdk/, docs/, etc.),
+  # deployment is NOT triggered automatically.
+  # The user must go to Jenkins UI and trigger a build manually.
 
   manual-deploy-notice:
     name: Manual Deploy Required

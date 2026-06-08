@@ -165,3 +165,12 @@ git push origin feature/my-change
 
 # Create PR targeting develop → merge → auto-deploy
 ```
+
+## Test Log
+
+| # | Date | Branch | Change Type | Expected | Actual | Status |
+|---|------|--------|-------------|----------|--------|--------|
+| 1 | Jun 8 | feature/common-lora-update | Non-product (common/) | Manual Notice | Manual Notice shown | PASS |
+| 2 | Jun 8 | feature/one-v3.0 | Product (ONE/) | Auto deploy ONE | Auto deploy ONE triggered | PASS |
+| 3 | Jun 9 | feature/test-non-product-change | Non-product (README) | Manual Notice | Pending... | - |
+| 4 | Jun 9 | feature/test-product-change | Product (TIM/) | Auto deploy TIM | Pending... | - |
