@@ -178,7 +178,7 @@ jobs:
           [ -n "$CRUMB" ] && CRUMB_HEADER="-H Jenkins-Crumb:$CRUMB"
 
           BUILD_URL="$JENKINS_URL/job/$JOB_NAME/job/$BRANCH/buildWithParameters"
-          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&DEPLOY_PRODUCT=${DEPLOY_PRODUCT_ENC}"
+          BUILD_URL="${BUILD_URL}?TARGET_ENV=${TARGET_ENV}&DEPLOY_PRODUCT=${DEPLOY_PRODUCT_ENC}&AUTO_DEPLOY=true"
 
           RESPONSE=$(curl -s -o /tmp/jenkins.txt -w "%{http_code}" \
             -X POST -u "$JENKINS_USER:$JENKINS_TOKEN" $CRUMB_HEADER \
