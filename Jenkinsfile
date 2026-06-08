@@ -45,15 +45,4 @@
 
 @Library('wf-jenkins-lib@feature/stm32-monorepo') _
 
-// Register AUTO_DEPLOY so GitHub Actions can pass it on first auto-build
-properties([
-    parameters([
-        booleanParam(
-            name: 'AUTO_DEPLOY',
-            defaultValue: false,
-            description: 'Set by GitHub Actions on PR merge. Do not enable manually.'
-        )
-    ])
-])
-
 STM32MonorepoPipeline()
