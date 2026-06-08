@@ -6,6 +6,7 @@ Monorepo containing multiple STM32 firmware products with shared code. The CI/CD
 
 - **Product folder changes** → automatic build & deploy
 - **Non-product changes only** (common/, sdk/, docs/, etc.) → manual deploy from Jenkins UI
+- **Manual trigger from Jenkins UI** → always manual (user selects products)
 - **New products** → just create a folder under `products/` — no pipeline changes needed
 
 ## Repository Structure
@@ -14,7 +15,7 @@ Monorepo containing multiple STM32 firmware products with shared code. The CI/CD
 ├── Jenkinsfile                         # Calls STM32MonorepoPipeline shared library
 ├── .github/workflows/
 │   └── trigger-jenkins.yml             # GitHub Actions: build + trigger Jenkins
-├── products/                           # ← Product folder (configurable name)
+├── products/                           # Product folder (hardcoded in library)
 │   ├── ONE/                            #   ONE (FSO) firmware
 │   │   ├── app/main.c
 │   │   ├── lora/lora_app.c
@@ -34,13 +35,11 @@ Monorepo containing multiple STM32 firmware products with shared code. The CI/CD
 | `products/ONE/` | ONE only | Auto |
 | `products/TIM/` + `products/FLO/` | TIM and FLO | Auto |
 | `products/ONE/` + `common/` | ONE only | Auto |
-| `products/ONE/` + `products/TIM/` + `sdk/` | ONE and TIM | Auto |
 | `common/` only | User selects from Jenkins UI | Manual |
-| `sdk/` only | User selects from Jenkins UI | Manual |
-| `common/` + `sdk/` + `docs/` | User selects from Jenkins UI | Manual |
-| `Jenkinsfile` or `README.md` only | User selects from Jenkins UI | Manual |
+| `sdk/` or `docs/` only | User selects from Jenkins UI | Manual |
+| Manual trigger from Jenkins UI | User selects from Jenkins UI | Manual |
 
-**Key rule:** If any `products/<name>/` folder has changes, only those products auto-deploy. Everything outside `products/` is ignored for auto-deploy.
+**Key rule:** If any `products/<name>/` folder has changes, only those products auto-deploy. Everything outside `products/` is ignored for auto-deploy. Manual trigger from Jenkins UI **always** prompts for product selection.
 
 ## CI/CD Flow
 
@@ -51,17 +50,21 @@ Developer → PR to develop/qa-devops → Merge
                     ▼                    ▼
            GitHub Actions            Jenkins (Multibranch)
            ─────────────            ────────────────────
-           1. Detect changes        1. Detect changes (git diff)
+           1. Detect changes        1. Check trigger source
+              (git diff HEAD~1)        (API vs manual)
            2. Build changed         2. Auto or Manual routing
               products (matrix)     3. Build in STM32 Docker
            3. Trigger Jenkins       4. Run unit tests
               (if products          5. Upload .bin to S3
                changed)            6. SCA scan
+                                   7. Slack/email notification
 ```
 
 ### GitHub Actions (`.github/workflows/trigger-jenkins.yml`)
 
 - Runs **only on PR merge** (not direct pushes)
+- Uses `actions/checkout@v4` with `fetch-depth: 2` (2 commits: merge + parent)
+- Change detection: `git diff --name-only HEAD~1 HEAD` compares merge commit with parent
 - Auto-discovers products from `products/` directory
 - Uses **dynamic matrix** to build only changed products in parallel
 - If product changes → triggers Jenkins deployment via API
@@ -70,31 +73,59 @@ Developer → PR to develop/qa-devops → Merge
 ### Jenkins (`Jenkinsfile` → `STM32MonorepoPipeline` library)
 
 - Loads shared library from `wf-jenkins-lib`
-- Auto-discovers products from `products/` directory
-- Detects changes via `git diff HEAD~1 HEAD`
-- **Auto mode:** deploys changed products without user input
-- **Manual mode:** pauses pipeline, user selects which products to deploy
+- Checks trigger source: `UserIdCause` (manual UI) vs `RemoteCause` (GitHub API)
+- **Auto mode:** API trigger + product changes → deploys changed products
+- **Manual mode:** manual trigger or non-product only → user selects products
+- Build display name: `#21 [ONE-v3.1.0] (AUTO)` or `#21 [TIM-v4.1.0] (MANUAL)`
 - Builds each product inside STM32 Docker container
 - Uploads `.bin` firmware artifacts to S3
 
-## Configuration
+## Notifications
 
-### Renaming the Products Folder
+The pipeline sends notifications on build success, failure, and abort.
 
-If you need to rename `products/` to something else (e.g., `firmware/`):
+### Slack
 
-| File | What to Change |
-|---|---|
-| `Jenkinsfile` | `productsDir: 'firmware'` |
-| `trigger-jenkins.yml` | `PRODUCTS_DIR: firmware` |
+Requires the [Slack Notification Plugin](https://plugins.jenkins.io/slack/) in Jenkins.
 
-### Adding a New Product
+| Event | Channel | Color | Message |
+|---|---|---|---|
+| Success | `#firmware-deployments` | Green | Products deployed, mode, build link |
+| Failure | `#firmware-deployments` | Red | Failed stage, console log link |
+| Aborted | `#firmware-deployments` | Yellow | Build link |
+
+**Setup:**
+1. Install Slack Notification Plugin in Jenkins
+2. Create a Slack app or incoming webhook
+3. Configure in Jenkins: Manage Jenkins → System → Slack
+4. Set workspace, channel, and credentials
+
+### Email
+
+Requires the [Email Extension Plugin](https://plugins.jenkins.io/email-ext/) in Jenkins.
+
+Sends HTML email on failure to:
+- **Requestor** — person who triggered the build
+- **Culprits** — developers whose commits are in the build
+
+**Setup:**
+1. Install Email Extension Plugin in Jenkins
+2. Configure SMTP in Jenkins: Manage Jenkins → System → Extended E-mail Notification
+3. Set SMTP server, port, credentials, and default recipients
+
+### GitHub Actions Failure
+
+GitHub Actions sends notifications natively:
+- Failed checks appear on the PR and in GitHub notification settings
+- Configure email/Slack notifications in GitHub → Settings → Notifications
+
+## Adding a New Product
 
 1. Create a folder: `products/NEW_PRODUCT/`
-2. Add your firmware code inside it
+2. Add `app/main.c` with `#define FIRMWARE_VERSION "1.0.0"`
 3. Done — the pipeline auto-discovers it
 
-### Branches & Environments
+## Branches & Environments
 
 | Branch | Environment | Deploy Trigger |
 |---|---|---|
@@ -109,30 +140,10 @@ The pipeline logic lives in `wf-jenkins-lib` at `vars/STM32MonorepoPipeline.groo
 ```groovy
 // Jenkinsfile — this is all you need
 @Library('wf-jenkins-lib') _
-
-STM32MonorepoPipeline(
-    productsDir: 'products'
-)
+STM32MonorepoPipeline()
 ```
 
-### Library Configuration Options
-
-| Parameter | Default | Description |
-|---|---|---|
-| `productsDir` | `'products'` | Root folder containing product subdirectories |
-| `additionalChoiceParam` | `[:]` | Extra Jenkins job parameters |
-| `isTeamEnvironment` | `false` | Team environment flag |
-| `dockerImage` | STM32IDE image | Override Docker build image |
-
-## Setup Guide
-
-### Prerequisites
-
-- GitHub repository with monorepo structure
-- Jenkins Multibranch Pipeline job
-- `wf-jenkins-lib` configured as a Global Shared Library in Jenkins
-
-### GitHub Secrets Required
+## GitHub Secrets Required
 
 | Secret | Description |
 |---|---|
@@ -140,31 +151,14 @@ STM32MonorepoPipeline(
 | `JENKINS_USER` | Jenkins user ID |
 | `JENKINS_TOKEN` | Jenkins API token |
 
-### Jenkins Job Configuration
-
-1. Create **Multibranch Pipeline** → point to this repo
-2. Configure **Branch Sources** → Git with credentials
-3. The `Jenkinsfile` automatically uses the shared library
-
 ## Pending TODO
 
 - [ ] **Dockerfile:** Add real STM32 build Docker image
 - [ ] **Build commands:** Replace placeholder `make` commands with actual firmware toolchain
 - [ ] **Unit tests:** Configure C Unity test framework per product
 - [ ] **Library merge:** Merge `wf-jenkins-lib` branch `feature/stm32-monorepo` to master, then update `@Library` in Jenkinsfile
-
-## Local Development
-
-```bash
-git checkout develop
-git checkout -b feature/my-change
-
-# Make changes to product code
-git add . && git commit -m "Update ONE firmware"
-git push origin feature/my-change
-
-# Create PR targeting develop → merge → auto-deploy
-```
+- [ ] **Slack:** Install Slack plugin and configure webhook in Jenkins
+- [ ] **Email:** Configure SMTP settings in Jenkins for failure emails
 
 ## Test Log
 
@@ -172,5 +166,5 @@ git push origin feature/my-change
 |---|------|--------|-------------|----------|--------|--------|
 | 1 | Jun 8 | feature/common-lora-update | Non-product (common/) | Manual Notice | Manual Notice shown | PASS |
 | 2 | Jun 8 | feature/one-v3.0 | Product (ONE/) | Auto deploy ONE | Auto deploy ONE triggered | PASS |
-| 3 | Jun 9 | feature/test-non-product-change | Non-product (README) | Manual Notice | Pending... | - |
-| 4 | Jun 9 | feature/test-product-change | Product (TIM/) | Auto deploy TIM | Pending... | - |
+| 3 | Jun 9 | feature/test-non-product-change | Non-product (README) | Manual Notice | Manual Notice shown, no Jenkins trigger | PASS |
+| 4 | Jun 9 | feature/test-product-change | Product (TIM/) | Auto deploy TIM | Build TIM passed, Jenkins trigger attempted | PASS |
