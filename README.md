@@ -2,11 +2,46 @@
 
 ## Overview
 
-Monorepo containing multiple STM32 firmware products with shared code. The CI/CD pipeline **auto-discovers** products, detects changes via git diff, and deploys **only the products that changed**.
+Monorepo containing multiple STM32 firmware products with shared code. The CI/CD pipeline **auto-discovers** products, detects changes using **GitHub PR Files API**, and deploys **only the products that changed**.
 
 - **Product folder changes** → automatic build & deploy
 - **Non-product changes only** (common/, sdk/, docs/, etc.) → manual deploy from Jenkins UI
 - **New products** → just create a folder under `products/` — no pipeline changes needed
+
+## How Change Detection Works
+
+The pipeline uses **GitHub's PR Files API** — the same data shown in the "Files changed" tab when you view a PR. This ensures:
+
+- ✅ **All commits included** — PR with 70 commits shows all changed files, not just the last commit
+- ✅ **Exact match to PR UI** — what you see in "Files changed" is what triggers deployment
+- ✅ **Works with any merge strategy** — squash, merge commit, or rebase
+
+```
+PR #123: feature/update-flo → develop
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  GitHub API: /pulls/123/files       │
+│  (same as "Files changed" tab)      │
+│                                     │
+│  products/FLO/app/main.c            │
+│  products/FLO/lora/app_version.h    │
+│  common/board/inc/board_config.h    │
+│  README.md                          │
+└─────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│  Match file paths → product folders │
+│                                     │
+│  products/FLO/...  →  FLO ✓         │
+│  common/...        →  non-product   │
+│  README.md         →  non-product   │
+└─────────────────────────────────────┘
+         │
+         ▼
+   Auto Deploy: ["FLO"]
+```
 
 ## Repository Structure
 
@@ -62,7 +97,11 @@ Developer → PR to develop/qa-devops → Merge
 ### GitHub Actions (`.github/workflows/trigger-jenkins.yml`)
 
 - Runs **only on PR merge** (not direct pushes)
-- Auto-discovers products from `products/` directory
+- **Change detection:** Uses GitHub PR Files API (`gh api /pulls/{pr}/files`)
+  - Matches exactly what you see in PR "Files changed" tab
+  - Includes ALL files from ALL commits in the PR
+  - Works with squash, merge commit, or rebase strategies
+- Auto-discovers products from `products/` directory (no hardcoding)
 - Uses **dynamic matrix** to build only changed products in parallel
 - If product changes → triggers Jenkins deployment via API
 - If non-product changes only → shows "Manual Deploy Required" notice
@@ -71,7 +110,7 @@ Developer → PR to develop/qa-devops → Merge
 
 - Loads shared library from `wf-jenkins-lib`
 - Auto-discovers products from `products/` directory
-- Detects changes via `git diff HEAD~1 HEAD`
+- Receives changed products list from GitHub Actions (via `DEPLOY_PRODUCT` parameter)
 - **Auto mode:** deploys changed products without user input
 - **Manual mode:** pauses pipeline, user selects which products to deploy
 - Builds each product inside STM32 Docker container
@@ -165,6 +204,43 @@ git push origin feature/my-change
 
 # Create PR targeting develop → merge → auto-deploy
 ```
+
+## Testing Change Detection Locally
+
+You can verify which files/products would be detected before merging:
+
+```bash
+# See changed files for a PR (same as "Files changed" tab)
+gh pr diff 123 --name-only
+
+# Or via API (exactly what the workflow uses)
+gh api repos/OWNER/REPO/pulls/123/files --jq '.[].filename'
+
+# Compare branches directly
+git diff --name-only develop...feature/my-branch
+
+# Checkout PR to inspect
+gh pr checkout 123
+```
+
+## Version Management
+
+Each product maintains its version in `lora/app_version.h`:
+
+```c
+#define APP_VERSION_MAIN   (0x01U)  // Major
+#define APP_VERSION_SUB1   (0x06U)  // Minor
+#define APP_VERSION_SUB2   (0x03U)  // Patch
+// → Version tag: [FLO-v1.6.3]
+```
+
+| Product | Version File | Example Tag |
+|---------|--------------|-------------|
+| FLO | `products/FLO/lora/app_version.h` | `[FLO-v1.6.3]` |
+| ONE | `products/ONE/lora/app_version.h` | `[ONE-v3.1.3]` |
+| TIM | `products/TIM/lora/app_version.h` | `[TIM-v4.1.2]` |
+| TIM+ | `products/TIM+/lora/app_version.h` | `[TIM_PLUS-v1.5.1]` |
+| FSO | `products/FSO/lora/app_version.h` | `[FSO-v1.0.0]` |
 
 ## Test Log
 
