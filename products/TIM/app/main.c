@@ -2,7 +2,7 @@
 #include "board_config.h"
 
 #define PRODUCT_NAME "TIM"
-#define FIRMWARE_VERSION "3.0.0"
+#define FIRMWARE_VERSION "4.1.2"
 
 int main(void) {
     Board_Init();

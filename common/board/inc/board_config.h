@@ -1,7 +1,7 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_VERSION "1.0.0"
+#define BOARD_VERSION "1.2.0"
 #define LORA_FREQUENCY_BAND 868
 
 #endif

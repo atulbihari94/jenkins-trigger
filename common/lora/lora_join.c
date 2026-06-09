@@ -2,3 +2,4 @@
 void LoRa_Join(void) {
     /* Perform OTAA join */
 }
+// LoRa frequency hopping enabled

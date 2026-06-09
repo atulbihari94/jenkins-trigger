@@ -1,183 +1,48 @@
-def deployProducts = []
-def prId = 'N/A'
-def commitMsg = ''
-def commonChanged = false
-def sdkChanged = false
-def allProducts = ['ONE', 'TIM', 'TIM+', 'FLO']
+/*
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │                    STM32 MONOREPO PIPELINE                             │
+ * ├─────────────────────────────────────────────────────────────────────────┤
+ * │                                                                       │
+ * │  This Jenkinsfile calls the STM32MonorepoPipeline shared library      │
+ * │  from wf-jenkins-lib. All pipeline logic lives in the library.        │
+ * │                                                                       │
+ * │  PARAMETERS (shown in Jenkins UI):                                    │
+ * │  ──────────────────────────────────                                   │
+ * │  - TARGET_ENV: dev / qa environment                                   │
+ * │  - DEPLOY_PRODUCT: Product to deploy (auto-set by GitHub Actions)     │
+ * │  - IS_SCAN_ONLY_SRC: SonarQube scan src folder only                   │
+ * │  - AUTO_DEPLOY: Set by GitHub Actions (do not enable manually)        │
+ * │                                                                       │
+ * │  CONFIGURATION (hardcoded in wf-jenkins-lib):                         │
+ * │  ─────────────────────────────────────────────                        │
+ * │  - productsDir: 'products' (cannot be changed from Jenkinsfile)       │
+ * │                                                                       │
+ * │  FLOW:                                                                │
+ * │  ─────                                                                │
+ * │  1. GitHub Actions (.github/workflows/trigger-jenkins.yml):           │
+ * │     - Runs on PR merge to develop / qa-devops                         │
+ * │     - Uses GitHub PR Files API to detect changed files                │
+ * │     - Builds only changed products (dynamic matrix)                   │
+ * │     - Product changes → triggers Jenkins via API                      │
+ * │     - Non-product changes only → shows "Manual Deploy" notice         │
+ * │                                                                       │
+ * │  2. Jenkins (STM32MonorepoPipeline library):                          │
+ * │     - API trigger + AUTO_DEPLOY=true → auto deploy products           │
+ * │     - Manual trigger from Jenkins UI → user selects product           │
+ * │     - Builds firmware in STM32 Docker container                       │
+ * │     - Uploads .bin artifacts to S3                                    │
+ * │                                                                       │
+ * │  DEPLOYMENT RULES:                                                    │
+ * │  ─────────────────                                                    │
+ * │  products/ONE/ changed     → auto deploy ONE only                     │
+ * │  products/ONE/ + TIM/      → auto deploy ONE and TIM                  │
+ * │  products/ONE/ + common/   → auto deploy ONE only                     │
+ * │  common/ or sdk/ only      → manual deploy (user picks)               │
+ * │  Manual trigger from UI    → manual deploy (user picks)               │
+ * │                                                                       │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ */
 
-pipeline {
-    agent any
+@Library('wf-jenkins-lib@feature/stm32-monorepo') _
 
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Detect PR & Changes') {
-            steps {
-                script {
-                    commitMsg = sh(
-                        script: "git log -1 --pretty=%B",
-                        returnStdout: true
-                    ).trim()
-
-                    def prMatch = (commitMsg =~ /Merge pull request #(\d+)/)
-                    if (prMatch.find()) {
-                        prId = prMatch.group(1)
-                    } else {
-                        def prMatch2 = (commitMsg =~ /#(\d+)/)
-                        if (prMatch2.find()) {
-                            prId = prMatch2.group(1)
-                        }
-                    }
-
-                    def changes = sh(
-                        script: "git diff --name-only HEAD~1 HEAD || echo ''",
-                        returnStdout: true
-                    ).trim()
-
-                    def changedFiles = changes.split('\n')
-
-                    commonChanged = changedFiles.any { it.startsWith("common/") }
-                    sdkChanged = changedFiles.any { it.startsWith("sdk/") }
-
-                    if (commonChanged || sdkChanged) {
-                        deployProducts = allProducts.collect()
-                    } else {
-                        allProducts.each { product ->
-                            if (changedFiles.any { it.startsWith("products/${product}/") }) {
-                                deployProducts.add(product)
-                            }
-                        }
-                    }
-
-                    echo "============================================"
-                    echo "         DEPLOYMENT PIPELINE"
-                    echo "============================================"
-                    echo "  PR ID:              #${prId}"
-                    echo "  Branch:              ${env.BRANCH_NAME}"
-                    echo "  Commit:              ${commitMsg}"
-                    echo "  Common changed:      ${commonChanged}"
-                    echo "  SDK changed:         ${sdkChanged}"
-                    echo "  Changed files:"
-                    changedFiles.each { echo "    - ${it}" }
-                    if (commonChanged || sdkChanged) {
-                        echo "  >> SHARED CODE changed — deploying ALL products"
-                    }
-                    echo "  Products to deploy:  ${deployProducts.isEmpty() ? 'NONE' : deployProducts.join(', ')}"
-                    echo "============================================"
-                }
-            }
-        }
-
-        stage('Deploy ONE') {
-            when {
-                allOf {
-                    expression { return deployProducts.contains('ONE') }
-                    anyOf { branch 'develop'; branch 'qa-devops' }
-                }
-            }
-            steps {
-                script {
-                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/ONE/ changed'
-                    echo "============================================"
-                    echo "  DEPLOYING: ONE (FSO)"
-                    echo "  PR:          #${prId}"
-                    echo "  Reason:      ${reason}"
-                    echo "  Environment: ${env_name}"
-                    echo "============================================"
-                    // sh "cd products/ONE && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-                }
-            }
-        }
-
-        stage('Deploy TIM') {
-            when {
-                allOf {
-                    expression { return deployProducts.contains('TIM') }
-                    anyOf { branch 'develop'; branch 'qa-devops' }
-                }
-            }
-            steps {
-                script {
-                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/TIM/ changed'
-                    echo "============================================"
-                    echo "  DEPLOYING: TIM"
-                    echo "  PR:          #${prId}"
-                    echo "  Reason:      ${reason}"
-                    echo "  Environment: ${env_name}"
-                    echo "============================================"
-                    // sh "cd products/TIM && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-                }
-            }
-        }
-
-        stage('Deploy TIM+') {
-            when {
-                allOf {
-                    expression { return deployProducts.contains('TIM+') }
-                    anyOf { branch 'develop'; branch 'qa-devops' }
-                }
-            }
-            steps {
-                script {
-                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/TIM+/ changed'
-                    echo "============================================"
-                    echo "  DEPLOYING: TIM+"
-                    echo "  PR:          #${prId}"
-                    echo "  Reason:      ${reason}"
-                    echo "  Environment: ${env_name}"
-                    echo "============================================"
-                    // sh "cd 'products/TIM+' && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-                }
-            }
-        }
-
-        stage('Deploy FLO') {
-            when {
-                allOf {
-                    expression { return deployProducts.contains('FLO') }
-                    anyOf { branch 'develop'; branch 'qa-devops' }
-                }
-            }
-            steps {
-                script {
-                    def env_name = env.BRANCH_NAME == 'develop' ? 'DEVELOPMENT' : 'QA'
-                    def reason = (commonChanged || sdkChanged) ? 'shared code changed — deploying all' : 'products/FLO/ changed'
-                    echo "============================================"
-                    echo "  DEPLOYING: FLO"
-                    echo "  PR:          #${prId}"
-                    echo "  Reason:      ${reason}"
-                    echo "  Environment: ${env_name}"
-                    echo "============================================"
-                    // sh "cd products/FLO && ./deploy.sh ${env.BRANCH_NAME == 'develop' ? 'dev' : 'qa'}"
-                }
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "============================================"
-            echo "  DEPLOYMENT COMPLETE"
-            echo "  PR:             #${prId}"
-            echo "  Branch:         ${env.BRANCH_NAME}"
-            echo "  Common changed: ${commonChanged}"
-            echo "  SDK changed:    ${sdkChanged}"
-            echo "  Products:       ${deployProducts.isEmpty() ? 'none' : deployProducts.join(', ')}"
-            echo "============================================"
-        }
-        failure {
-            echo "============================================"
-            echo "  DEPLOYMENT FAILED"
-            echo "  PR:       #${prId}"
-            echo "  Branch:   ${env.BRANCH_NAME}"
-            echo "============================================"
-        }
-    }
-}
+STM32MonorepoPipeline()
