@@ -11,7 +11,6 @@
  * │  - TARGET_ENV: dev / qa environment                                   │
  * │  - DEPLOY_PRODUCT: Product to deploy (auto-set by GitHub Actions)     │
  * │  - IS_SCAN_ONLY_SRC: SonarQube scan src folder only                   │
- * │  - AUTO_DEPLOY: Set by GitHub Actions (do not enable manually)        │
  * │                                                                       │
  * │  CONFIGURATION (hardcoded in wf-jenkins-lib):                         │
  * │  ─────────────────────────────────────────────                        │
@@ -27,7 +26,7 @@
  * │     - Non-product changes only → shows "Manual Deploy" notice         │
  * │                                                                       │
  * │  2. Jenkins (STM32MonorepoPipeline library):                          │
- * │     - API trigger + AUTO_DEPLOY=true → auto deploy products           │
+ * │     - API trigger (RemoteCause)      → auto deploy products           │
  * │     - Manual trigger from Jenkins UI → user selects product           │
  * │     - Builds firmware in STM32 Docker container                       │
  * │     - Uploads .bin artifacts to S3                                    │
