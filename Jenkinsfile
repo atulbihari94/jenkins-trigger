@@ -6,20 +6,29 @@
  * │  This Jenkinsfile calls the STM32MonorepoPipeline shared library      │
  * │  from wf-jenkins-lib. All pipeline logic lives in the library.        │
  * │                                                                       │
+ * │  PARAMETERS (shown in Jenkins UI):                                    │
+ * │  ──────────────────────────────────                                   │
+ * │  - TARGET_ENV: dev / qa environment                                   │
+ * │  - DEPLOY_PRODUCT: Product to deploy (auto-set by GitHub Actions)     │
+ * │  - IS_SCAN_ONLY_SRC: SonarQube scan src folder only                   │
+ * │  - AUTO_DEPLOY: Set by GitHub Actions (do not enable manually)        │
+ * │                                                                       │
+ * │  CONFIGURATION (hardcoded in wf-jenkins-lib):                         │
+ * │  ─────────────────────────────────────────────                        │
+ * │  - productsDir: 'products' (cannot be changed from Jenkinsfile)       │
+ * │                                                                       │
  * │  FLOW:                                                                │
  * │  ─────                                                                │
  * │  1. GitHub Actions (.github/workflows/trigger-jenkins.yml):           │
  * │     - Runs on PR merge to develop / qa-devops                         │
- * │     - Auto-discovers products from products/ directory                │
+ * │     - Uses GitHub PR Files API to detect changed files                │
  * │     - Builds only changed products (dynamic matrix)                   │
  * │     - Product changes → triggers Jenkins via API                      │
  * │     - Non-product changes only → shows "Manual Deploy" notice         │
  * │                                                                       │
  * │  2. Jenkins (STM32MonorepoPipeline library):                          │
- * │     - Detects HOW it was triggered (API vs manual)                    │
- * │     - API trigger + product changes → AUTO deploy                     │
- * │     - Manual trigger from Jenkins UI → MANUAL (user selects)          │
- * │     - Non-product changes only → MANUAL (user selects)                │
+ * │     - API trigger + AUTO_DEPLOY=true → auto deploy products           │
+ * │     - Manual trigger from Jenkins UI → user selects product           │
  * │     - Builds firmware in STM32 Docker container                       │
  * │     - Uploads .bin artifacts to S3                                    │
  * │                                                                       │
@@ -30,15 +39,6 @@
  * │  products/ONE/ + common/   → auto deploy ONE only                     │
  * │  common/ or sdk/ only      → manual deploy (user picks)               │
  * │  Manual trigger from UI    → manual deploy (user picks)               │
- * │  New folder in products/   → auto-discovered, no code changes needed  │
- * │                                                                       │
- * │  TODO:                                                                │
- * │  ─────                                                                │
- * │  - [ ] Add real Dockerfile for STM32 build environment                │
- * │  - [ ] Configure actual firmware build commands (make/cmake)          │
- * │  - [ ] Set up C Unity test framework per product                      │
- * │  - [ ] Merge wf-jenkins-lib feature/stm32-monorepo to master,        │
- * │        then change @Library below to @Library('wf-jenkins-lib') _     │
  * │                                                                       │
  * └─────────────────────────────────────────────────────────────────────────┘
  */
